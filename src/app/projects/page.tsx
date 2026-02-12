@@ -18,7 +18,7 @@ import {
 import { auth, db } from "@/lib/firebaseClient";
 
 type MyProjectRow = {
-  id: string;            // = projectId（または sourceProjectId）
+  id: string; // = projectId（または sourceProjectId）
   name: string;
   role: "owner" | "member";
   ownerUid: string;
@@ -77,7 +77,7 @@ export default function ProjectsPage() {
       return {
         id: projectId,
         name: toStr(data.projectName) || toStr(data.name) || "(名称未設定)",
-        role: (data.role === "member" ? "member" : "owner"),
+        role: data.role === "member" ? "member" : "owner",
         ownerUid: toStr(data.ownerUid),
       };
     });
@@ -101,7 +101,7 @@ export default function ProjectsPage() {
       try {
         setLoading(true);
         await loadProjects(u.uid);
-      } catch (e) {
+      } catch {
         setErrorText("工事一覧の取得に失敗しました。");
       } finally {
         setLoading(false);
@@ -162,8 +162,9 @@ export default function ProjectsPage() {
       // 3) 自分のプロフィール（membersに同梱する用）
       const cRef = doc(db, "craftsmen", myUid);
       const cSnap = await getDoc(cRef);
-      const cp = (cSnap.exists() ? (cSnap.data() as CraftsmanProfile) : null);
-      const displayName = toStr(cp?.name) || (auth.currentUser?.displayName ?? "") || "職人";
+      const cp = cSnap.exists() ? (cSnap.data() as CraftsmanProfile) : null;
+      const displayName =
+        toStr(cp?.name) || (auth.currentUser?.displayName ?? "") || "職人";
 
       // 4) users/{uid}/myProjects/{projectId}
       await setDoc(
@@ -243,7 +244,9 @@ export default function ProjectsPage() {
               <button
                 key={p.id}
                 type="button"
-                onClick={() => router.push(`/menu?projectId=${encodeURIComponent(p.id)}`)}
+                onClick={() =>
+                  router.push(`/menu?projectId=${encodeURIComponent(p.id)}`)
+                }
                 className="rounded-2xl border bg-white px-4 py-4 text-left hover:bg-gray-50 dark:border-gray-800 dark:bg-gray-950 dark:hover:bg-gray-900"
               >
                 <div className="text-sm font-extrabold text-gray-900 dark:text-gray-100">
@@ -282,7 +285,7 @@ export default function ProjectsPage() {
       {/* Join modal */}
       {joinOpen && (
         <div className="fixed inset-0 z-50 overflow-y-auto bg-black/50">
-          <div className="flex min-h-[100svh] items-start justify-center p-3 pt-6 sm:items-center sm:p-4">
+          <div className="flex items-start justify-center p-3 pt-6 sm:items-center sm:p-4">
             <div className="w-[90vw] max-w-md max-h-[calc(100svh-3rem)] overflow-y-auto rounded-2xl border bg-white p-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] shadow-xl dark:border-gray-800 dark:bg-gray-950">
               <div className="relative">
                 <div className="pl-12">
@@ -328,13 +331,17 @@ export default function ProjectsPage() {
 
               {errorText && (
                 <div className="mt-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2">
-                  <p className="text-sm font-semibold text-red-700">{errorText}</p>
+                  <p className="text-sm font-semibold text-red-700">
+                    {errorText}
+                  </p>
                 </div>
               )}
 
               {joinInfo && (
                 <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2">
-                  <p className="text-sm font-extrabold text-emerald-700">{joinInfo}</p>
+                  <p className="text-sm font-extrabold text-emerald-700">
+                    {joinInfo}
+                  </p>
                 </div>
               )}
 
