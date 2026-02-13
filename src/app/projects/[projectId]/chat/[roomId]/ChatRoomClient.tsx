@@ -1,27 +1,36 @@
+// src/app/projects/[projectId]/chat/[roomId]/ChatRoomClient.tsx
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { onAuthStateChanged } from "firebase/auth";
 import {
   addDoc,
   collection,
   doc,
+  getDoc,
+  getDocs,
   limit,
   onSnapshot,
   orderBy,
   query,
   serverTimestamp,
+  where,
   type DocumentData,
   type QueryDocumentSnapshot,
 } from "firebase/firestore";
 
 import { auth, db } from "@/lib/firebaseClient";
-import {
-  loadChatProfile,
-  type ChatProfile,
-  type ChatRole,
-} from "@/lib/chatProfile";
+
+type ChatRole = "manager" | "craftsman" | "resident" | "proclink";
+
+type ChatProfile = {
+  uid: string;
+  name: string;
+  role: ChatRole;
+  projectId: string;
+  projectName: string | null;
+};
 
 type ChatMessage = {
   text?: string;
@@ -29,6 +38,28 @@ type ChatMessage = {
   senderName?: string;
   senderRole?: ChatRole;
   createdAt?: unknown;
+};
+
+type MemberRole = "manager" | "craftsman" | "resident" | "proclink";
+type Role = "owner" | "member";
+
+type ProjectMemberDoc = {
+  uid?: string;
+
+  role?: Role;            // owner/member
+  memberRole?: MemberRole; // manager/craftsman/...
+
+  name?: string;
+  displayName?: string;
+
+  company?: string;
+  phone?: string;
+  address?: string;
+  email?: string;
+
+  createdAt?: unknown;
+  updatedAt?: unknown;
+  joinedAt?: unknown;
 };
 
 function toNonEmptyString(v: unknown): string {
@@ -42,32 +73,59 @@ function mapMsg(d: QueryDocumentSnapshot<DocumentData>): {
   return { id: d.id, data: d.data() as ChatMessage };
 }
 
-export default function ChatRoomPage() {
+async function getMember(projectId: string, uid: string): Promise<ProjectMemberDoc | null> {
+  // パターンA: docId = uid
+  const ref1 = doc(db, "projects", projectId, "members", uid);
+  const snap1 = await getDoc(ref1);
+  if (snap1.exists()) {
+    return snap1.data() as ProjectMemberDoc;
+  }
+
+  // パターンB: uid フィールド検索
+  const col = collection(db, "projects", projectId, "members");
+  const qy = query(col, where("uid", "==", uid));
+  const qs = await getDocs(qy);
+  if (!qs.empty) {
+    return qs.docs[0].data() as ProjectMemberDoc;
+  }
+
+  return null;
+}
+
+export default function ChatRoomClient(props: {
+  initialProjectId: string;
+  initialRoomId: string;
+}) {
   const router = useRouter();
-  const params = useParams<{ roomId: string }>();
-  const roomId = toNonEmptyString(params?.roomId) || "main";
+
+  const projectId = useMemo(
+    () => toNonEmptyString(props.initialProjectId),
+    [props.initialProjectId],
+  );
+  const roomId = useMemo(
+    () => toNonEmptyString(props.initialRoomId) || "main",
+    [props.initialRoomId],
+  );
 
   const [loading, setLoading] = useState(true);
   const [profile, setProfile] = useState<ChatProfile | null>(null);
-
   const [errorText, setErrorText] = useState<string | null>(null);
-  const [msgs, setMsgs] = useState<Array<{ id: string; data: ChatMessage }>>(
-    [],
-  );
 
+  const [msgs, setMsgs] = useState<Array<{ id: string; data: ChatMessage }>>([]);
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
 
   const listRef = useRef<HTMLDivElement | null>(null);
   const stickToBottomRef = useRef(true);
 
-  const projectId = useMemo(
-    () => toNonEmptyString(profile?.projectId),
-    [profile?.projectId],
-  );
-
-  // 1) Auth → プロファイル（craftsmen or renovaMembers）
+  // 1) Auth → projects/{projectId}/members からプロフィール生成
   useEffect(() => {
+    if (!projectId) {
+      setErrorText("現場IDが不正です。");
+      setLoading(false);
+      return;
+    }
+
     let mounted = true;
 
     const unsub = onAuthStateChanged(auth, async (u) => {
@@ -78,17 +136,33 @@ export default function ChatRoomPage() {
           return;
         }
 
-        const p = await loadChatProfile(db, u.uid);
+        const mem = await getMember(projectId, u.uid);
         if (!mounted) return;
 
-        if (!p) {
+        if (!mem) {
           setProfile(null);
-          setErrorText("プロフィール/現場情報が見つかりません。");
+          setErrorText("この現場のメンバー情報が見つかりません。");
           setLoading(false);
           return;
         }
 
-        setProfile(p);
+        const name =
+          toNonEmptyString(mem.name) ||
+          toNonEmptyString(mem.displayName) ||
+          toNonEmptyString(u.displayName) ||
+          "不明";
+
+        const role = (toNonEmptyString(mem.memberRole) as ChatRole) || "craftsman";
+
+        setProfile({
+          uid: u.uid,
+          name,
+          role,
+          projectId,
+          projectName: null, // 必要なら projects/{projectId} から取れる
+        });
+
+        setErrorText(null);
         setLoading(false);
       } catch (e) {
         console.log("chat profile error:", e);
@@ -103,22 +177,13 @@ export default function ChatRoomPage() {
       mounted = false;
       unsub();
     };
-  }, [router]);
+  }, [projectId, router]);
 
-  // 2) messages を購読（projectId が確定してから）
+  // 2) messages 購読
   useEffect(() => {
     if (!projectId) return;
 
-    setErrorText(null);
-
-    const colRef = collection(
-      db,
-      "projects",
-      projectId,
-      "chatRooms",
-      roomId,
-      "messages",
-    );
+    const colRef = collection(db, "projects", projectId, "chatRooms", roomId, "messages");
     const qy = query(colRef, orderBy("createdAt", "asc"), limit(300));
 
     const unsub = onSnapshot(
@@ -137,47 +202,30 @@ export default function ChatRoomPage() {
     return () => unsub();
   }, [projectId, roomId]);
 
-  // 3) スクロール制御（下に追従したい時だけ追従）
+  // 3) 下追従スクロール
   useEffect(() => {
     const el = listRef.current;
     if (!el) return;
-
     if (!stickToBottomRef.current) return;
-
-    // 新着で最下部へ
     el.scrollTop = el.scrollHeight;
   }, [msgs.length]);
 
   function handleScroll() {
     const el = listRef.current;
     if (!el) return;
-
-    // 下端から少し上までを「下追従」とみなす
     const threshold = 40;
-    const atBottom =
-      el.scrollHeight - (el.scrollTop + el.clientHeight) < threshold;
+    const atBottom = el.scrollHeight - (el.scrollTop + el.clientHeight) < threshold;
     stickToBottomRef.current = atBottom;
   }
 
   async function send() {
     if (!profile) return;
-
     const t = toNonEmptyString(text);
     if (!t) return;
 
-    if (!projectId) return;
-
     try {
       setSending(true);
-
-      const colRef = collection(
-        db,
-        "projects",
-        projectId,
-        "chatRooms",
-        roomId,
-        "messages",
-      );
+      const colRef = collection(db, "projects", projectId, "chatRooms", roomId, "messages");
 
       await addDoc(colRef, {
         text: t,
@@ -197,12 +245,56 @@ export default function ChatRoomPage() {
     }
   }
 
-  if (loading) return null;
-  if (!profile) return null;
+  // ✅ 真っ黒にしない（必ず描画する）
+  if (loading) {
+    return (
+      <main className="min-h-dvh bg-gray-50 dark:bg-gray-950">
+        <div className="mx-auto w-full max-w-md px-4 py-10">
+          <div className="rounded-2xl border bg-white p-6 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+            <div className="text-sm font-extrabold text-gray-900 dark:text-gray-100">
+              読み込み中...
+            </div>
+          </div>
+        </div>
+      </main>
+    );
+  }
+
+  if (errorText) {
+    return (
+      <main className="min-h-dvh bg-gray-50 dark:bg-gray-950">
+        <div className="mx-auto w-full max-w-md px-4 py-10">
+          <div className="rounded-2xl border bg-white p-6 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+            <div className="text-lg font-extrabold text-gray-900 dark:text-gray-100">
+              現場チャット
+            </div>
+            <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3">
+              <p className="text-sm font-semibold text-red-700">{errorText}</p>
+            </div>
+
+            <div className="mt-6">
+              <button
+                type="button"
+                onClick={() => router.push(`/projects/${encodeURIComponent(projectId)}/menu`)}
+                className="w-full rounded-xl border bg-white px-3 py-2 text-sm font-extrabold text-gray-900 hover:bg-gray-50
+                           dark:border-gray-800 dark:bg-gray-950 dark:text-gray-100 dark:hover:bg-gray-900"
+              >
+                メニューへ戻る
+              </button>
+            </div>
+          </div>
+        </div>
+      </main>
+    );
+  }
+
+  if (!profile) {
+    // 念のため（通常ここには来ない）
+    return null;
+  }
 
   return (
     <main className="min-h-dvh bg-gray-50 dark:bg-gray-950">
-      {/* ヘッダ */}
       <div className="sticky top-0 z-10 border-b bg-white/90 backdrop-blur dark:border-gray-800 dark:bg-gray-950/80">
         <div className="mx-auto flex w-full max-w-2xl items-center justify-between gap-3 px-4 py-3">
           <div className="min-w-0">
@@ -210,14 +302,13 @@ export default function ChatRoomPage() {
               現場チャット
             </div>
             <div className="truncate text-xs font-bold text-gray-500 dark:text-gray-400">
-              現場：{profile.projectName || "（名称未設定）"} / {profile.name}（
-              {profile.role === "manager" ? "監督" : "職人"}）
+              {profile.name}（{profile.role === "manager" ? "監督" : "職人"}）
             </div>
           </div>
 
           <button
             type="button"
-            onClick={() => router.push("/menu")}
+            onClick={() => router.push(`/projects/${encodeURIComponent(projectId)}/menu`)}
             className="shrink-0 rounded-xl border bg-white px-3 py-2 text-sm font-extrabold text-gray-900 hover:bg-gray-50
                        dark:border-gray-800 dark:bg-gray-950 dark:text-gray-100 dark:hover:bg-gray-900"
           >
@@ -226,16 +317,8 @@ export default function ChatRoomPage() {
         </div>
       </div>
 
-      {/* 本文 */}
       <div className="mx-auto w-full max-w-2xl px-3 py-3">
-        {errorText && (
-          <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3">
-            <p className="text-sm font-semibold text-red-700">{errorText}</p>
-          </div>
-        )}
-
         <div className="rounded-2xl border bg-white dark:border-gray-800 dark:bg-gray-900 overflow-hidden">
-          {/* メッセージ一覧 */}
           <div
             ref={listRef}
             onScroll={handleScroll}
@@ -250,17 +333,11 @@ export default function ChatRoomPage() {
                 {msgs.map((m) => {
                   const mine = m.data.senderUid === profile.uid;
                   const sender = toNonEmptyString(m.data.senderName) || "不明";
-                  const body = toNonEmptyString(m.data.text) || "";
-                  const badge =
-                    m.data.senderRole === "manager" ? "監督" : "職人";
+                  const body = toNonEmptyString(m.data.text);
+                  const badge = m.data.senderRole === "manager" ? "監督" : "職人";
 
                   return (
-                    <div
-                      key={m.id}
-                      className={
-                        mine ? "flex justify-end" : "flex justify-start"
-                      }
-                    >
+                    <div key={m.id} className={mine ? "flex justify-end" : "flex justify-start"}>
                       <div
                         className={[
                           "max-w-[90%] rounded-2xl border px-3 py-2",
@@ -285,7 +362,6 @@ export default function ChatRoomPage() {
             )}
           </div>
 
-          {/* 送信欄 */}
           <div className="border-t bg-white px-3 py-3 dark:border-gray-800 dark:bg-gray-900">
             <div className="flex items-end gap-2">
               <textarea
@@ -294,7 +370,7 @@ export default function ChatRoomPage() {
                 placeholder="メッセージを入力..."
                 rows={2}
                 className="w-full resize-none rounded-xl border px-3 py-2 font-bold text-gray-900
-             focus:outline-none dark:border-gray-800 dark:bg-gray-950 dark:text-gray-100"
+                           focus:outline-none dark:border-gray-800 dark:bg-gray-950 dark:text-gray-100"
                 style={{ fontSize: 16 }}
                 disabled={sending}
               />
@@ -306,10 +382,6 @@ export default function ChatRoomPage() {
               >
                 送信
               </button>
-            </div>
-            <div className="mt-2 text-[11px] font-bold text-gray-500 dark:text-gray-400">
-              ※
-              画像/動画は次のステップで追加できます（まずはテキストで安定させる）
             </div>
           </div>
         </div>

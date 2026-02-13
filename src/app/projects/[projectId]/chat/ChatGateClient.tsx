@@ -1,22 +1,63 @@
+// src/app/projects/[projectId]/chat/ChatGateClient.tsx
 "use client";
 
-import React, { useEffect, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import React, { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { onAuthStateChanged } from "firebase/auth";
-import { doc, serverTimestamp, setDoc } from "firebase/firestore";
+import {
+  doc,
+  getDoc,
+  collection,
+  getDocs,
+  query,
+  where,
+  serverTimestamp,
+  setDoc,
+} from "firebase/firestore";
 
 import { auth, db } from "@/lib/firebaseClient";
-import { loadChatProfile, type ChatProfile } from "@/lib/chatProfile";
-import { loadCraftsmanSession } from "@/lib/craftsmanSession";
+
+type ChatRole = "manager" | "craftsman" | "resident" | "proclink";
+
+type ProjectMemberDoc = {
+  uid?: string;
+  role?: "owner" | "member";
+  memberRole?: ChatRole;
+
+  name?: string;
+  displayName?: string;
+  email?: string;
+
+  company?: string;
+  phone?: string;
+};
 
 function toNonEmptyString(v: unknown): string {
   return typeof v === "string" && v.trim() ? v.trim() : "";
 }
 
-export default function ChatGatePage() {
+async function getMemberDocByUid(projectId: string, uid: string) {
+  // 1) ドキュメントID=uid の場合（あなたのスクショはこれ）
+  const ref1 = doc(db, "projects", projectId, "members", uid);
+  const snap1 = await getDoc(ref1);
+  if (snap1.exists()) return snap1.data() as ProjectMemberDoc;
+
+  // 2) もし docId が uid じゃない運用もあり得るので fallback（uid フィールド検索）
+  const col = collection(db, "projects", projectId, "members");
+  const qy = query(col, where("uid", "==", uid));
+  const qs = await getDocs(qy);
+  if (!qs.empty) return qs.docs[0].data() as ProjectMemberDoc;
+
+  return null;
+}
+
+export default function ChatGateClient(props: { initialProjectId: string }) {
   const router = useRouter();
-  const searchParams = useSearchParams();
-  const projectIdFromQuery = searchParams.get("projectId");
+
+  const projectId = useMemo(
+    () => toNonEmptyString(props.initialProjectId),
+    [props.initialProjectId],
+  );
 
   const [busy, setBusy] = useState(true);
   const [errorText, setErrorText] = useState<string | null>(null);
@@ -32,24 +73,6 @@ export default function ChatGatePage() {
           return;
         }
 
-        const profile: ChatProfile | null = await loadChatProfile(db, u.uid);
-        if (!profile) {
-          if (!mounted) return;
-          setErrorText("プロフィール/現場情報が見つかりません。管理者に確認してください。");
-          setBusy(false);
-          return;
-        }
-
-        const session = loadCraftsmanSession();
-        const projectId =
-          toNonEmptyString(projectIdFromQuery) ||
-          toNonEmptyString(session?.projectId) ||
-          toNonEmptyString(profile.projectId);
-
-        const projectName =
-          (session?.projectName ?? null) ||
-          (profile.projectName ?? null);
-
         if (!projectId) {
           if (!mounted) return;
           setErrorText("現場IDが指定されていません。");
@@ -57,8 +80,20 @@ export default function ChatGatePage() {
           return;
         }
 
-        // 1現場=1ルーム（main）を作成/更新（無ければ作る）
+        // ✅ ここが重要：profile は craftsmen じゃなくて projects/{projectId}/members から取る
+        const mem = await getMemberDocByUid(projectId, u.uid);
+        if (!mem) {
+          if (!mounted) return;
+          setErrorText(
+            "この現場のメンバー情報が見つかりません。管理者に確認してください。",
+          );
+          setBusy(false);
+          return;
+        }
+
         const roomId = "main";
+
+        // room を用意
         await setDoc(
           doc(db, "projects", projectId, "chatRooms", roomId),
           {
@@ -66,19 +101,24 @@ export default function ChatGatePage() {
             type: "project",
             name: "現場チャット",
             projectId,
-            projectName,
             updatedAt: serverTimestamp(),
             createdAt: serverTimestamp(),
           },
           { merge: true },
         );
 
+        // ✅ ここでルームに入る
         if (!mounted) return;
-        router.replace(`/chat/${roomId}?projectId=${encodeURIComponent(projectId)}`);
+        router.replace(
+          `/projects/${encodeURIComponent(projectId)}/chat/${encodeURIComponent(roomId)}`,
+        );
       } catch (e) {
         console.log("chat gate error:", e);
         if (!mounted) return;
         setErrorText("チャットの開始に失敗しました。");
+        setBusy(false);
+      } finally {
+        if (!mounted) return;
         setBusy(false);
       }
     });
@@ -87,7 +127,7 @@ export default function ChatGatePage() {
       mounted = false;
       unsub();
     };
-  }, [router]);
+  }, [projectId, router]);
 
   return (
     <main className="min-h-dvh bg-gray-50 dark:bg-gray-950">
@@ -110,10 +150,9 @@ export default function ChatGatePage() {
           <div className="mt-6">
             <button
               type="button"
-              onClick={() => {
-                const pid = toNonEmptyString(projectIdFromQuery) || toNonEmptyString(loadCraftsmanSession()?.projectId);
-                router.push(pid ? `/menu?projectId=${encodeURIComponent(pid)}` : "/menu");
-              }}
+              onClick={() =>
+                router.push(`/projects/${encodeURIComponent(projectId)}/menu`)
+              }
               className="w-full rounded-xl border bg-white px-3 py-2 text-sm font-extrabold text-gray-900 hover:bg-gray-50
                          dark:border-gray-800 dark:bg-gray-950 dark:text-gray-100 dark:hover:bg-gray-900"
             >

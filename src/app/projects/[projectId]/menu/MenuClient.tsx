@@ -1,12 +1,16 @@
+// src/app/projects/[projectId]/menu/MenuClient.tsx
 "use client";
 
 import React, { useEffect, useState, useMemo } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { onAuthStateChanged, signOut, type User } from "firebase/auth";
 import { doc, getDoc } from "firebase/firestore";
 
 import { auth, db } from "@/lib/firebaseClient";
-import { loadCraftsmanSession, saveCraftsmanSession } from "@/lib/craftsmanSession";
+import {
+  loadCraftsmanSession,
+  saveCraftsmanSession,
+} from "@/lib/craftsmanSession";
 
 type CraftsmanProfile = {
   uid?: string;
@@ -25,14 +29,21 @@ function toNonEmptyString(v: unknown): string {
   return typeof v === "string" && v.trim() ? v.trim() : "";
 }
 
-export default function MenuClient() {
+export default function MenuClient({
+  initialProjectId,
+}: {
+  initialProjectId?: string;
+}) {
   const router = useRouter();
-  const searchParams = useSearchParams();
-  const projectIdFromQuery = searchParams.get("projectId");
+
   const session = useMemo(() => loadCraftsmanSession(), []);
+
+  // ✅ projectId は「URL params（initialProjectId）」を最優先。次に session。
   const resolvedProjectId = useMemo(() => {
-    return toNonEmptyString(projectIdFromQuery) || toNonEmptyString(session?.projectId);
-  }, [projectIdFromQuery, session]);
+    return (
+      toNonEmptyString(initialProjectId) || toNonEmptyString(session?.projectId)
+    );
+  }, [initialProjectId, session]);
 
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState<User | null>(null);
@@ -67,7 +78,6 @@ export default function MenuClient() {
         const p = snap.data() as CraftsmanProfile;
         setProfile(p);
 
-        // ✅ 新フロー：projectId は URL か session から決める（未選択なら /projects へ）
         const pickedProjectId = resolvedProjectId;
 
         if (!pickedProjectId) {
@@ -95,6 +105,7 @@ export default function MenuClient() {
                 }))
                 .filter((x) => x.projectId)
             : [];
+
           const hit = list.find((x) => x.projectId === pickedProjectId);
           if (hit?.projectName) pickedProjectName = hit.projectName;
         }
@@ -118,7 +129,7 @@ export default function MenuClient() {
     });
 
     return () => unsub();
-  }, [router, resolvedProjectId, projectIdFromQuery, session]);
+  }, [router, resolvedProjectId, session]);
 
   async function handleLogout() {
     await signOut(auth);
@@ -141,7 +152,10 @@ export default function MenuClient() {
 
   if (!user) return null;
 
-  const name = toNonEmptyString(profile?.name) || toNonEmptyString(user.displayName) || "職人";
+  const name =
+    toNonEmptyString(profile?.name) ||
+    toNonEmptyString(user.displayName) ||
+    "職人";
   const company = toNonEmptyString(profile?.company);
 
   return (
@@ -182,7 +196,10 @@ export default function MenuClient() {
           <div className="mt-6 grid gap-3">
             <button
               type="button"
-              onClick={() => router.push(`/board?projectId=${encodeURIComponent(projectId)}`)}
+              onClick={() => {
+                console.log("projectId:", projectId);
+                router.push(`/projects/${encodeURIComponent(projectId)}/board`);
+              }}
               className="w-full rounded-2xl border bg-white p-4 text-left hover:bg-gray-50
                          dark:border-gray-800 dark:bg-gray-950 dark:hover:bg-gray-900"
             >
@@ -196,9 +213,11 @@ export default function MenuClient() {
 
             <button
               type="button"
-              onClick={() => router.push(`/chat?projectId=${encodeURIComponent(projectId)}`)}
+              onClick={() =>
+                router.push(`/projects/${encodeURIComponent(projectId)}/chat`)
+              }
               className="w-full rounded-2xl border bg-white p-4 text-left hover:bg-gray-50
-                         dark:border-gray-800 dark:bg-gray-950 dark:hover:bg-gray-900"
+             dark:border-gray-800 dark:bg-gray-950 dark:hover:bg-gray-900"
             >
               <div className="text-base font-extrabold text-gray-900 dark:text-gray-100">
                 現場関係者グループチャット
@@ -210,9 +229,13 @@ export default function MenuClient() {
 
             <button
               type="button"
-              onClick={() => router.push(`/managers?projectId=${encodeURIComponent(projectId)}`)}
+              onClick={() =>
+                router.push(
+                  `/projects/${encodeURIComponent(projectId)}/managers`,
+                )
+              }
               className="w-full rounded-2xl border bg-white p-4 text-left hover:bg-gray-50
-                         dark:border-gray-800 dark:bg-gray-950 dark:hover:bg-gray-900"
+             dark:border-gray-800 dark:bg-gray-950 dark:hover:bg-gray-900"
             >
               <div className="text-base font-extrabold text-gray-900 dark:text-gray-100">
                 監督員にDM

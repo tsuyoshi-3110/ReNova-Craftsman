@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "firebase": "^12.9.0",
+    "libphonenumber-js": "^1.12.36",
     "next": "16.1.6",
     "pdfjs-dist": "^5.4.624",
     "react": "19.2.3",

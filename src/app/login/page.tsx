@@ -20,7 +20,9 @@ export default function LoginPage() {
   const [errorText, setErrorText] = useState<string | null>(null);
 
   const canLogin = useMemo(() => {
-    return normalizeText(email).length > 0 && normalizeText(password).length > 0;
+    return (
+      normalizeText(email).length > 0 && normalizeText(password).length > 0
+    );
   }, [email, password]);
 
   async function onLogin() {
@@ -32,16 +34,25 @@ export default function LoginPage() {
 
     try {
       setBusy(true);
-      await signInWithEmailAndPassword(auth, normalizeText(email), normalizeText(password));
-      router.replace("/menu");
+      await signInWithEmailAndPassword(
+        auth,
+        normalizeText(email),
+        normalizeText(password),
+      );
+      router.replace("/projects");
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
-      if (msg.includes("auth/invalid-credential") || msg.includes("auth/wrong-password")) {
+      if (
+        msg.includes("auth/invalid-credential") ||
+        msg.includes("auth/wrong-password")
+      ) {
         setErrorText("メールアドレスまたはパスワードが違います。");
         return;
       }
       if (msg.includes("auth/user-not-found")) {
-        setErrorText("このメールのアカウントが見つかりません。新規作成してください。");
+        setErrorText(
+          "このメールのアカウントが見つかりません。新規作成してください。",
+        );
         return;
       }
       setErrorText("ログインに失敗しました。通信状況をご確認ください。");
@@ -59,9 +70,6 @@ export default function LoginPage() {
             <h1 className="text-lg font-extrabold text-gray-900 dark:text-gray-100">
               ログイン
             </h1>
-            <Link href="/register" className="text-sm font-extrabold text-blue-600">
-              新規作成へ
-            </Link>
           </div>
 
           {errorText && (
@@ -107,6 +115,13 @@ export default function LoginPage() {
             >
               {busy ? "ログイン中..." : "ログイン"}
             </button>
+
+            <Link
+              href="/register"
+              className="mt-2 block w-full text-center text-sm font-extrabold text-blue-600"
+            >
+              アカウント作成はこちら
+            </Link>
           </div>
         </div>
       </div>

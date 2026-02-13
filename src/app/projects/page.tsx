@@ -17,10 +17,15 @@ import {
 
 import { auth, db } from "@/lib/firebaseClient";
 
+type Role = "owner" | "member";
+
+// 現場内の役割（ドメイン役割）
+type MemberRole = "manager" | "craftsman" | "resident" | "proclink";
+
 type MyProjectRow = {
   id: string; // = projectId（または sourceProjectId）
   name: string;
-  role: "owner" | "member";
+  role: Role; // 権限用
   ownerUid: string;
 };
 
@@ -45,12 +50,12 @@ type ProjectMeta = {
   ownerUid?: string;
 };
 
+// renova-craftsman 側プロフィール（この画面では members に同梱するために使う）
 type CraftsmanProfile = {
   name?: string;
   company?: string;
   phone?: string;
   address?: string;
-  workType?: string;
 };
 
 export default function ProjectsPage() {
@@ -163,16 +168,18 @@ export default function ProjectsPage() {
       const cRef = doc(db, "craftsmen", myUid);
       const cSnap = await getDoc(cRef);
       const cp = cSnap.exists() ? (cSnap.data() as CraftsmanProfile) : null;
+
       const displayName =
         toStr(cp?.name) || (auth.currentUser?.displayName ?? "") || "職人";
 
       // 4) users/{uid}/myProjects/{projectId}
+      // ✅ ここは「権限用 role=member」
       await setDoc(
         doc(db, "users", myUid, "myProjects", projectId),
         {
           projectId,
           projectName: projectName || null,
-          role: "member",
+          role: "member" as Role,
           ownerUid: ownerUid || null,
           updatedAt: serverTimestamp(),
           createdAt: serverTimestamp(),
@@ -182,18 +189,29 @@ export default function ProjectsPage() {
       );
 
       // 5) projects/{projectId}/members/{uid}
+      // ✅ ここは「role=member（権限用）」＋「memberRole=craftsman（現場役割）」
+      // ✅ workType / invitedByUid / photoURL / revoked は入れない
       await setDoc(
         doc(db, "projects", projectId, "members", myUid),
         {
           uid: myUid,
-          role: "craftsman",
+
+          role: "member" as Role,
+          memberRole: "craftsman" as MemberRole,
+
           displayName,
+          email: auth.currentUser?.email ?? "",
+          name: displayName,
+
           company: cp?.company ?? "",
           phone: cp?.phone ?? "",
           address: cp?.address ?? "",
-          workType: cp?.workType ?? "",
+
+          source: "share_code",
+
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
+          joinedAt: serverTimestamp(),
         },
         { merge: true },
       );
@@ -245,7 +263,7 @@ export default function ProjectsPage() {
                 key={p.id}
                 type="button"
                 onClick={() =>
-                  router.push(`/menu?projectId=${encodeURIComponent(p.id)}`)
+                  router.push(`/projects/${encodeURIComponent(p.id)}/menu`)
                 }
                 className="rounded-2xl border bg-white px-4 py-4 text-left hover:bg-gray-50 dark:border-gray-800 dark:bg-gray-950 dark:hover:bg-gray-900"
               >

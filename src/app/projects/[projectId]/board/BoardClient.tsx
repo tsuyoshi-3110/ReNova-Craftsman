@@ -1,23 +1,13 @@
-// src/app/board/page.tsx
+// src/app/projects/[projectId]/board/BoardClient.tsx
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { onAuthStateChanged } from "firebase/auth";
-import { collection, doc, getDoc, getDocs, query, where, orderBy } from "firebase/firestore";
+import { collection, getDocs, orderBy, query, where } from "firebase/firestore";
 
 import { auth, db } from "@/lib/firebaseClient";
-
-type CraftsmanProfile = {
-  uid: string;
-  email?: string;
-  name?: string;
-  company?: string;
-
-  projectId?: string;
-  projectName?: string | null;
-  shareCode?: string;
-};
+import { loadCraftsmanSession } from "@/lib/craftsmanSession";
 
 type BoardPdf = {
   target?: string;
@@ -31,84 +21,52 @@ function toNonEmptyString(v: unknown): string {
   return typeof v === "string" && v.trim() ? v.trim() : "";
 }
 
-export default function BoardPage() {
+export default function BoardClient(props: { initialProjectId: string }) {
   const router = useRouter();
 
-  const [loadingMember, setLoadingMember] = useState(true);
-  const [member, setMember] = useState<CraftsmanProfile | null>(null);
+  const projectId = useMemo(
+    () => toNonEmptyString(props.initialProjectId),
+    [props.initialProjectId],
+  );
 
+  const session = useMemo(
+    () => (typeof window === "undefined" ? null : loadCraftsmanSession()),
+    [],
+  );
+
+  const projectName =
+    (session?.projectId === projectId ? session?.projectName : null) ?? null;
+
+  const [ready, setReady] = useState(false); // auth guard 完了
+  const [busy, setBusy] = useState(true);
   const [errorText, setErrorText] = useState<string | null>(null);
   const [items, setItems] = useState<Array<{ id: string; data: BoardPdf }>>([]);
-  const [busy, setBusy] = useState(true);
 
-  // 1) Auth → craftsmen を取得（projectId を確定）
+  // auth guard（ログイン必須）
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, async (user) => {
-      try {
-        if (!user) {
-          setMember(null);
-          setLoadingMember(false);
-          router.replace("/login");
-          return;
-        }
-
-        const ref = doc(db, "craftsmen", user.uid);
-        const snap = await getDoc(ref);
-
-        if (!snap.exists()) {
-          setMember(null);
-          setLoadingMember(false);
-          router.replace("/register");
-          return;
-        }
-
-        const d = snap.data() as Partial<CraftsmanProfile>;
-        const projectId = toNonEmptyString(d.projectId);
-
-        if (!projectId) {
-          // 職人プロフィールに projectId が無いなら、登録へ戻して入力させる
-          setMember(null);
-          setLoadingMember(false);
-          router.replace("/register");
-          return;
-        }
-
-        setMember({
-          uid: user.uid,
-          email: user.email ?? undefined,
-          name: d.name,
-          company: d.company,
-          projectId,
-          projectName: d.projectName ?? null,
-          shareCode: d.shareCode,
-        });
-
-        setLoadingMember(false);
-      } catch (e) {
-        console.log("craftsmen load error:", e);
-        setMember(null);
-        setLoadingMember(false);
+    const unsub = onAuthStateChanged(auth, (u) => {
+      if (!u) {
         router.replace("/login");
+        return;
       }
+      setReady(true);
     });
-
     return () => unsub();
   }, [router]);
 
-  // 2) projectId が確定したら boardPdfs を取得
+  // boardPdfs 取得
   useEffect(() => {
-    const run = async () => {
-      const pid = member?.projectId;
-      if (!pid) return;
+    if (!ready) return;
+    if (!projectId) return;
 
+    let mounted = true;
+
+    (async () => {
       try {
         setBusy(true);
         setErrorText(null);
 
-        const colRef = collection(db, "projects", pid, "boardPdfs");
-
-        // target == craftsman のみ
-        // createdAt があるなら orderBy も付ける（無い場合は外してOK）
+        const colRef = collection(db, "projects", projectId, "boardPdfs");
         const qy = query(
           colRef,
           where("target", "==", "craftsman"),
@@ -117,22 +75,32 @@ export default function BoardPage() {
 
         const snap = await getDocs(qy);
 
-        const rows: Array<{ id: string; data: BoardPdf }> = [];
-        snap.forEach((d) => rows.push({ id: d.id, data: d.data() as BoardPdf }));
+        const rows: Array<{ id: string; data: BoardPdf }> = snap.docs.map(
+          (d) => ({
+            id: d.id,
+            data: d.data() as BoardPdf,
+          }),
+        );
+
+        if (!mounted) return;
         setItems(rows);
       } catch (e) {
-        console.log("craftsman board list error:", e);
+        console.log("board pdf list error:", e);
+        if (!mounted) return;
         setErrorText("PDF一覧の取得に失敗しました。");
       } finally {
+        if (!mounted) return;
         setBusy(false);
       }
+    })();
+
+    return () => {
+      mounted = false;
     };
+  }, [ready, projectId]);
 
-    void run();
-  }, [member?.projectId]);
-
-  if (loadingMember) return null;
-  if (!member) return null;
+  if (!projectId) return null;
+  if (!ready) return null;
 
   return (
     <main className="min-h-dvh bg-gray-50 dark:bg-gray-950">
@@ -143,13 +111,15 @@ export default function BoardPage() {
               掲示板（職人用PDF）
             </div>
             <div className="text-xs font-bold text-gray-500 dark:text-gray-400">
-              現場：{member.projectName || "（名称未設定）"}
+              現場：{projectName || "（名称未設定）"}
             </div>
           </div>
 
           <button
             type="button"
-            onClick={() => router.push("/menu")}
+            onClick={() =>
+              router.push(`/projects/${encodeURIComponent(projectId)}/menu`)
+            }
             className="rounded-xl border bg-white px-3 py-2 text-sm font-extrabold text-gray-900 hover:bg-gray-50
                        dark:border-gray-800 dark:bg-gray-950 dark:text-gray-100 dark:hover:bg-gray-900"
           >
@@ -182,7 +152,6 @@ export default function BoardPage() {
                   disabled={!url}
                   onClick={() => {
                     if (!url) return;
-                    // ✅同タブで直接PDFを開く → 標準ビューア（回転/ズーム最強）
                     window.location.assign(url);
                   }}
                   className="rounded-2xl border bg-white p-4 text-left hover:bg-gray-50 disabled:opacity-60

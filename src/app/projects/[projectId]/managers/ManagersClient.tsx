@@ -6,35 +6,53 @@ import { onAuthStateChanged } from "firebase/auth";
 import { collection, getDocs, query, where } from "firebase/firestore";
 
 import { auth, db } from "@/lib/firebaseClient";
-import { loadCraftsmanSession } from "@/lib/craftsmanSession";
 
-type ProjectMember = {
+type MemberRole = "manager" | "craftsman" | "resident" | "proclink";
+type Role = "owner" | "member";
+
+type ProjectMemberDoc = {
   uid?: string;
-  role?: string; // "manager" 想定
+
+  // 一般的な権限ロール（編集可否など用）
+  role?: Role;
+
+  // ドメインロール（ReNova: manager/ craftsman/ resident）
+  memberRole?: MemberRole;
+
+  // 表示用
   name?: string;
+  displayName?: string;
+
+  // プロフィール
   company?: string;
   phone?: string;
+  address?: string;
   email?: string;
+
+  // timestamps
+  createdAt?: unknown;
+  updatedAt?: unknown;
+  joinedAt?: unknown;
 };
+
+type Item = { id: string; data: ProjectMemberDoc };
 
 function toNonEmptyString(v: unknown): string {
   return typeof v === "string" && v.trim() ? v.trim() : "";
 }
 
-export default function ManagersPage() {
+export default function ManagersClient(props: { initialProjectId: string }) {
   const router = useRouter();
 
-  const session = useMemo(
-    () => (typeof window === "undefined" ? null : loadCraftsmanSession()),
-    [],
+  const projectId = useMemo(
+    () => toNonEmptyString(props.initialProjectId),
+    [props.initialProjectId],
   );
 
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(true);
   const [errorText, setErrorText] = useState<string | null>(null);
-  const [items, setItems] = useState<Array<{ id: string; data: ProjectMember }>>([]);
-
-  const projectId = toNonEmptyString(session?.projectId);
+  const [items, setItems] = useState<Item[]>([]);
 
   // auth guard
   useEffect(() => {
@@ -44,9 +62,10 @@ export default function ManagersPage() {
     return () => unsub();
   }, [router]);
 
+  // load managers
   useEffect(() => {
     if (!projectId) {
-      router.replace("/menu");
+      router.replace("/projects");
       return;
     }
 
@@ -57,13 +76,15 @@ export default function ManagersPage() {
         setBusy(true);
         setErrorText(null);
 
-        // ✅ projects/{projectId}/members の「manager」を一覧
+        // ✅ ReNova: projects/{projectId}/members から memberRole == "manager" を取得
         const colRef = collection(db, "projects", projectId, "members");
-        const qy = query(colRef, where("role", "==", "manager"));
+        const qy = query(colRef, where("memberRole", "==", "manager"));
         const snap = await getDocs(qy);
 
-        const rows: Array<{ id: string; data: ProjectMember }> = [];
-        snap.forEach((d) => rows.push({ id: d.id, data: d.data() as ProjectMember }));
+        const rows: Item[] = snap.docs.map((d) => ({
+          id: d.id,
+          data: d.data() as ProjectMemberDoc,
+        }));
 
         if (!mounted) return;
         setItems(rows);
@@ -94,13 +115,15 @@ export default function ManagersPage() {
               監督員一覧
             </div>
             <div className="text-xs font-bold text-gray-500 dark:text-gray-400">
-              現場：{session?.projectName || "（名称未設定）"}
+              現場ID：{projectId}
             </div>
           </div>
 
           <button
             type="button"
-            onClick={() => router.push("/menu")}
+            onClick={() =>
+              router.push(`/projects/${encodeURIComponent(projectId)}/menu`)
+            }
             className="rounded-xl border bg-white px-3 py-2 text-sm font-extrabold text-gray-900 hover:bg-gray-50
                        dark:border-gray-800 dark:bg-gray-950 dark:text-gray-100 dark:hover:bg-gray-900"
           >
@@ -125,7 +148,11 @@ export default function ManagersPage() {
             </div>
           ) : (
             items.map((it) => {
-              const name = toNonEmptyString(it.data.name) || "監督員";
+              const display =
+                toNonEmptyString(it.data.name) ||
+                toNonEmptyString(it.data.displayName) ||
+                "監督";
+
               const company = toNonEmptyString(it.data.company);
               const phone = toNonEmptyString(it.data.phone);
 
@@ -138,7 +165,7 @@ export default function ManagersPage() {
                              dark:border-gray-800 dark:bg-gray-900 dark:hover:bg-gray-900/70"
                 >
                   <div className="text-sm font-extrabold text-gray-900 dark:text-gray-100">
-                    {name}
+                    {display}
                   </div>
                   <div className="mt-1 text-xs font-bold text-gray-500 dark:text-gray-400">
                     {company ? `会社：${company}` : ""}

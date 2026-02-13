@@ -2,7 +2,6 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-
 import {
   createUserWithEmailAndPassword,
   onAuthStateChanged,
@@ -10,14 +9,40 @@ import {
 } from "firebase/auth";
 import { doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
 
+import { AsYouType } from "libphonenumber-js";
 import { auth, db } from "@/lib/firebaseClient";
 
 function toNonEmptyString(v: unknown): string {
   return typeof v === "string" && v.trim() ? v.trim() : "";
 }
 
-function normalizePhone(input: string): string {
-  return input.replace(/\s+/g, "").trim();
+// 表示用：入力を整形（日本としてフォーマット）
+function formatPhoneJP(input: string): string {
+  // 先頭の + だけ許可、それ以外は数字のみ
+  const trimmed = input.trim();
+  const hasPlus = trimmed.startsWith("+");
+  const digitsOnly = trimmed.replace(/[^\d]/g, "");
+  const cleaned = hasPlus ? `+${digitsOnly}` : digitsOnly;
+
+  if (!cleaned) return "";
+
+  try {
+    // AsYouType().input() の戻り値は「入力途中でも自然な表示」になり、テンプレ(x)を返さない
+    return new AsYouType("JP").input(cleaned);
+  } catch {
+    // フォーマット失敗時は数字(+任意)だけ返す
+    return cleaned;
+  }
+}
+
+// 保存用：数字のみ（09012345678）
+function normalizePhoneForSave(input: string): string {
+  const digits = input.replace(/[^\d]/g, "").trim();
+  // +81(日本)の形で入力された場合を 0 始まりに寄せる（例: +819012345678 -> 09012345678）
+  if (digits.startsWith("81") && digits.length === 12) {
+    return `0${digits.slice(2)}`;
+  }
+  return digits;
 }
 
 export default function RegisterClient() {
@@ -25,7 +50,10 @@ export default function RegisterClient() {
 
   const [name, setName] = useState("");
   const [address, setAddress] = useState("");
+
+  // phone は「表示用」を state に持つ（入力中フォーマット）
   const [phone, setPhone] = useState("");
+
   const [company, setCompany] = useState("");
   const [workType, setWorkType] = useState("");
 
@@ -42,10 +70,13 @@ export default function RegisterClient() {
   const redirectedRef = useRef(false);
 
   const canSubmitProfile = useMemo(() => {
+    const p = normalizePhoneForSave(phone);
     return (
       !!toNonEmptyString(name) &&
       !!toNonEmptyString(address) &&
-      !!toNonEmptyString(phone) &&
+      // 10-11桁想定（携帯/固定どちらでも）
+      p.length >= 10 &&
+      p.length <= 11 &&
       !!toNonEmptyString(company) &&
       !!toNonEmptyString(workType)
     );
@@ -89,17 +120,17 @@ export default function RegisterClient() {
     return () => unsub();
   }, [router]);
 
-  async function saveProfileOnly(args: {
-    uid: string;
-    usedEmail: string;
-  }) {
+  async function saveProfileOnly(args: { uid: string; usedEmail: string }) {
     const n = toNonEmptyString(name);
     const a = toNonEmptyString(address);
-    const p = normalizePhone(phone);
+
+    // ✅ 保存時は数字だけに統一
+    const p = normalizePhoneForSave(phone);
+
     const c = toNonEmptyString(company);
     const w = toNonEmptyString(workType);
 
-    if (!n || !a || !p || !c || !w) {
+    if (!n || !a || p.length < 10 || p.length > 11 || !c || !w) {
       throw new Error("PROFILE_INCOMPLETE");
     }
 
@@ -107,11 +138,11 @@ export default function RegisterClient() {
       doc(db, "craftsmen", args.uid),
       {
         uid: args.uid,
-        role: "craftsman",
-
+        role: "member",
+        memberRole: "craftsman",
         name: n,
         address: a,
-        phone: p,
+        phone: p, // ✅ 数字のみで保存
         company: c,
         workType: w,
         email: args.usedEmail,
@@ -132,9 +163,10 @@ export default function RegisterClient() {
       const current = auth.currentUser;
 
       // ✅ 既にログイン済み（Authはあるが craftsmen が無いケース）
-      // → プロフィールだけ保存（ここでは shareCode は必須にしない：要件どおり「作成時だけ必須」）
+      // → プロフィールだけ保存
       if (current) {
-        const usedEmail = toNonEmptyString(current.email) || toNonEmptyString(email);
+        const usedEmail =
+          toNonEmptyString(current.email) || toNonEmptyString(email);
 
         await updateProfile(current, { displayName: toNonEmptyString(name) });
 
@@ -165,7 +197,7 @@ export default function RegisterClient() {
         usedEmail: e,
       });
 
-      router.replace("/menu");
+      router.replace("/projects");
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
 
@@ -194,14 +226,14 @@ export default function RegisterClient() {
     }
   }
 
-   return (
+  return (
     <main className="min-h-dvh bg-gray-50 dark:bg-gray-950">
       <div className="mx-auto w-full max-w-md px-4 py-10">
         <div className="rounded-2xl border bg-white p-6 shadow-sm dark:border-gray-800 dark:bg-gray-900">
           <div className="flex items-start justify-between gap-3">
             <div>
               <div className="text-lg font-extrabold text-gray-900 dark:text-gray-100">
-                職人アカウント作成
+                アカウント作成
               </div>
               <div className="mt-1 text-xs font-bold text-gray-500 dark:text-gray-400">
                 まずプロフィールを登録し、ログイン後に工事一覧から参加します
@@ -241,11 +273,22 @@ export default function RegisterClient() {
               <input
                 className="w-full rounded-xl border px-3 py-2 dark:bg-gray-950 dark:text-gray-100 dark:border-gray-800"
                 value={phone}
-                onChange={(ev) => setPhone(ev.target.value)}
+                onChange={(ev) => {
+                  const raw = ev.target.value;
+                  setPhone(formatPhoneJP(raw));
+                }}
+                onBlur={() => {
+                  // blur で一度きれいに整形（入力途中の崩れを戻す）
+                  setPhone((prev) => formatPhoneJP(prev));
+                }}
                 disabled={busy}
-                placeholder="例）09012345678"
+                placeholder="例）090-1234-5678"
                 inputMode="tel"
+                autoComplete="tel"
               />
+              <div className="mt-1 text-xs font-bold text-gray-500 dark:text-gray-400">
+                ※ 保存時は数字のみ（{normalizePhoneForSave(phone) || "-"}）
+              </div>
             </Field>
 
             <Field label="所属会社名">
@@ -268,7 +311,7 @@ export default function RegisterClient() {
               />
             </Field>
 
-            {/* ✅ 未ログイン時だけ表示（=「アカウント作成」時だけ shareCode 必須） */}
+            {/* ✅ 未ログイン時だけ表示 */}
             {!authedUid && (
               <>
                 <Field label="メールアドレス">
@@ -279,6 +322,7 @@ export default function RegisterClient() {
                     disabled={busy}
                     placeholder="例）aaa@example.com"
                     inputMode="email"
+                    autoComplete="email"
                   />
                 </Field>
 
@@ -290,6 +334,7 @@ export default function RegisterClient() {
                     onChange={(ev) => setPassword(ev.target.value)}
                     disabled={busy}
                     placeholder="8文字以上推奨"
+                    autoComplete="new-password"
                   />
                 </Field>
               </>
@@ -298,15 +343,32 @@ export default function RegisterClient() {
             <button
               type="button"
               onClick={() => void handleRegisterOrSave()}
-              disabled={busy || (!authedUid ? !canCreateAuth : !canSubmitProfile)}
+              disabled={
+                busy || (!authedUid ? !canCreateAuth : !canSubmitProfile)
+              }
               className="mt-2 w-full rounded-xl bg-blue-600 py-2.5 text-white font-extrabold disabled:opacity-60"
             >
-              {busy ? "処理中..." : authedUid ? "プロフィール保存" : "アカウント作成"}
+              {busy
+                ? "処理中..."
+                : authedUid
+                  ? "プロフィール保存"
+                  : "アカウント作成"}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => router.push("/login")}
+              disabled={busy}
+              className="w-full rounded-xl border bg-white py-2.5 font-extrabold text-gray-900 hover:bg-gray-50 disabled:opacity-60
+                         dark:border-gray-800 dark:bg-gray-950 dark:text-gray-100 dark:hover:bg-gray-900"
+            >
+              ログイン画面に戻る
             </button>
 
             {authedUid && (
               <div className="text-xs font-bold text-gray-500 dark:text-gray-400">
-                ※ すでにログイン済みのため、ここではプロフィール情報のみ保存します。
+                ※
+                すでにログイン済みのため、ここではプロフィール情報のみ保存します。
               </div>
             )}
           </div>
@@ -316,7 +378,13 @@ export default function RegisterClient() {
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
   return (
     <div>
       <div className="mb-1 text-sm font-extrabold text-gray-800 dark:text-gray-200">
