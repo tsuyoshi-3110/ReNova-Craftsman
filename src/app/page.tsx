@@ -10,9 +10,17 @@ import { auth, db } from "@/lib/firebaseClient";
 
 export default function Home() {
   const router = useRouter();
+
+  const [mounted, setMounted] = useState(false);
   const [checking, setChecking] = useState(true);
 
   useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  useEffect(() => {
+    if (!mounted) return;
+
     const unsub = onAuthStateChanged(auth, async (user) => {
       try {
         if (!user) {
@@ -20,7 +28,6 @@ export default function Home() {
           return;
         }
 
-        // ✅ craftsmen/{uid} を確認（無ければ職人サイト利用不可）
         const snap = await getDoc(doc(db, "craftsmen", user.uid));
         if (!snap.exists()) {
           await signOut(auth);
@@ -31,13 +38,9 @@ export default function Home() {
         router.replace("/projects");
       } catch (e) {
         console.error("home auth check error:", e);
-
-        // 念のため安全側（ログアウト→ログインへ）
         try {
           await signOut(auth);
-        } catch {
-          // ignore
-        }
+        } catch {}
         router.replace("/login");
       } finally {
         setChecking(false);
@@ -45,10 +48,9 @@ export default function Home() {
     });
 
     return () => unsub();
-  }, [router]);
+  }, [router, mounted]);
 
-  // 判定中は何も描画しない（チラつき防止）
+  if (!mounted) return null;
   if (checking) return null;
-
   return null;
 }

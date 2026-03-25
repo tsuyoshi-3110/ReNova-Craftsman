@@ -1,10 +1,17 @@
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { onAuthStateChanged } from "firebase/auth";
 import {
   addDoc,
+  arrayUnion,
   collection,
   doc,
   getDoc,
@@ -13,6 +20,7 @@ import {
   orderBy,
   query,
   serverTimestamp,
+  updateDoc,
   type DocumentData,
   type QueryDocumentSnapshot,
 } from "firebase/firestore";
@@ -34,6 +42,8 @@ type Msg = {
 
   senderUid?: string;
   senderName?: string;
+  toUid?: string;
+  readBy?: string[];
 
   createdAt?: unknown;
   createdAtMs?: number;
@@ -56,7 +66,6 @@ type Member = {
   phone?: string;
 };
 
-
 /** -----------------------------
  * Utils
  * ----------------------------*/
@@ -71,9 +80,14 @@ function dmRoomId(a: string, b: string): string {
 function mapMsg(
   sourceKey: string,
   d: QueryDocumentSnapshot<DocumentData>,
-): { id: string; data: Msg } {
+): { id: string; roomId: string; docId: string; data: Msg } {
   // room混在でも衝突しないよう sourceKey を付ける
-  return { id: `${sourceKey}:${d.id}`, data: d.data() as Msg };
+  return {
+    id: `${sourceKey}:${d.id}`,
+    roomId: sourceKey,
+    docId: d.id,
+    data: d.data() as Msg,
+  };
 }
 
 function resolveCreatedAtMs(msg: Msg): number {
@@ -129,7 +143,8 @@ function resolveCreatedAtSortKey(msg: Msg): { sec: number; nano: number } {
   ) {
     const secRaw = (v as { seconds?: unknown }).seconds;
     const nanoRaw = (v as { nanoseconds?: unknown }).nanoseconds;
-    const sec = typeof secRaw === "number" && Number.isFinite(secRaw) ? secRaw : 0;
+    const sec =
+      typeof secRaw === "number" && Number.isFinite(secRaw) ? secRaw : 0;
     const nano =
       typeof nanoRaw === "number" && Number.isFinite(nanoRaw) ? nanoRaw : 0;
     return { sec, nano };
@@ -180,7 +195,9 @@ function resolveCreatedAtSortKey(msg: Msg): { sec: number; nano: number } {
   return { sec: 0, nano: 0 };
 }
 
-function inferMediaTypeFromMime(mime: string): "image" | "video" | "pdf" | null {
+function inferMediaTypeFromMime(
+  mime: string,
+): "image" | "video" | "pdf" | null {
   const m = toNonEmptyString(mime);
   if (!m) return null;
   if (m.startsWith("image/")) return "image";
@@ -189,7 +206,9 @@ function inferMediaTypeFromMime(mime: string): "image" | "video" | "pdf" | null 
   return null;
 }
 
-function inferMediaTypeFromFileName(name: string): "image" | "video" | "pdf" | null {
+function inferMediaTypeFromFileName(
+  name: string,
+): "image" | "video" | "pdf" | null {
   const n = toNonEmptyString(name).toLowerCase();
   if (!n) return null;
   if (n.endsWith(".pdf")) return "pdf";
@@ -227,8 +246,7 @@ async function uploadAttachment(args: {
   const isImage = f.type.startsWith("image/");
   const isVideo = f.type.startsWith("video/");
   const isPdf =
-    f.type === "application/pdf" ||
-    f.name.toLowerCase().endsWith(".pdf"); // ✅ mime空でもpdf扱い
+    f.type === "application/pdf" || f.name.toLowerCase().endsWith(".pdf"); // ✅ mime空でもpdf扱い
 
   if (!isImage && !isVideo && !isPdf) {
     throw new Error("UNSUPPORTED_FILE");
@@ -325,13 +343,16 @@ export default function DmPage() {
   const [peer, setPeer] = useState<Member | null>(null);
 
   const [errorText, setErrorText] = useState<string | null>(null);
-  const [msgs, setMsgs] = useState<Array<{ id: string; data: Msg }>>([]);
+  const [msgs, setMsgs] = useState<
+    Array<{ id: string; roomId: string; docId: string; data: Msg }>
+  >([]);
 
   const [text, setText] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [sending, setSending] = useState(false);
 
   const listRef = useRef<HTMLDivElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const stickToBottomRef = useRef(true);
 
   const roomId = useMemo(() => {
@@ -348,6 +369,16 @@ export default function DmPage() {
     if (!meUid || !peerUid) return "";
     return `${peerUid}__${meUid}`; // legacy reverse
   }, [meUid, peerUid]);
+
+  const resizeTextarea = useCallback(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+
+    el.style.height = "auto";
+    const nextHeight = Math.min(el.scrollHeight, 160);
+    el.style.height = `${nextHeight}px`;
+    el.style.overflowY = el.scrollHeight > 160 ? "auto" : "hidden";
+  }, []);
 
   // route guard
   useEffect(() => {
@@ -430,10 +461,18 @@ export default function DmPage() {
 
     setErrorText(null);
 
-    const byRoom = new Map<string, Array<{ id: string; data: Msg }>>();
+    const byRoom = new Map<
+      string,
+      Array<{ id: string; roomId: string; docId: string; data: Msg }>
+    >();
 
     const applyMerged = () => {
-      const merged: Array<{ id: string; data: Msg }> = [];
+      const merged: Array<{
+        id: string;
+        roomId: string;
+        docId: string;
+        data: Msg;
+      }> = [];
       byRoom.forEach((arr) => merged.push(...arr));
 
       merged.sort((a, b) => {
@@ -464,9 +503,51 @@ export default function DmPage() {
 
       return onSnapshot(
         qy,
-        (snap) => {
-          const rows: Array<{ id: string; data: Msg }> = [];
-          snap.forEach((d) => rows.push(mapMsg(rid, d)));
+        async (snap) => {
+          const rows: Array<{
+            id: string;
+            roomId: string;
+            docId: string;
+            data: Msg;
+          }> = [];
+          const markReadTasks: Promise<void>[] = [];
+
+          snap.forEach((d) => {
+            const mapped = mapMsg(rid, d);
+            rows.push(mapped);
+
+            const senderUid = toNonEmptyString(mapped.data.senderUid);
+            const readBy = Array.isArray(mapped.data.readBy)
+              ? mapped.data.readBy
+              : [];
+            const alreadyRead = readBy.includes(meUid);
+
+            if (meUid && senderUid && senderUid !== meUid && !alreadyRead) {
+              markReadTasks.push(
+                updateDoc(
+                  doc(
+                    db,
+                    "projects",
+                    projectId,
+                    "dmRooms",
+                    rid,
+                    "messages",
+                    d.id,
+                  ),
+                  {
+                    readBy: arrayUnion(meUid),
+                  },
+                ).catch((err) => {
+                  console.log("mark read error:", err);
+                }) as Promise<void>,
+              );
+            }
+          });
+
+          if (markReadTasks.length > 0) {
+            await Promise.all(markReadTasks);
+          }
+
           byRoom.set(rid, rows);
           applyMerged();
         },
@@ -499,6 +580,10 @@ export default function DmPage() {
       unsubs.forEach((fn) => fn());
     };
   }, [subscribeKey, projectId, roomId, legacyRoomId, legacyRoomIdReverse]);
+
+  useEffect(() => {
+    resizeTextarea();
+  }, [text, resizeTextarea]);
 
   // scroll follow
   useEffect(() => {
@@ -536,15 +621,13 @@ export default function DmPage() {
         "messages",
       );
 
-      let media:
-        | {
-            mediaUrl: string;
-            mediaType: "image" | "video" | "pdf";
-            fileName: string;
-            fileUrl: string;
-            fileType: string;
-          }
-        | null = null;
+      let media: {
+        mediaUrl: string;
+        mediaType: "image" | "video" | "pdf";
+        fileName: string;
+        fileUrl: string;
+        fileType: string;
+      } | null = null;
 
       if (file) {
         media = await uploadAttachment({ file, projectId, roomId });
@@ -554,6 +637,8 @@ export default function DmPage() {
         text: t || "",
         senderUid: meUid,
         senderName: meName,
+        toUid: peerUid,
+        readBy: [meUid],
         createdAt: serverTimestamp(),
         createdAtMs: Date.now(),
         ...(media ? media : {}),
@@ -564,6 +649,10 @@ export default function DmPage() {
       setText("");
       setFile(null);
       stickToBottomRef.current = true;
+
+      requestAnimationFrame(() => {
+        resizeTextarea();
+      });
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       console.log("dm send error:", e);
@@ -615,7 +704,7 @@ export default function DmPage() {
       </div>
 
       {/* body */}
-      <div className="mx-auto w-full max-w-2xl px-3 py-3">
+      <div className="mx-auto w-full max-w-2xl px-3 pt-3 pb-[96px]">
         {errorText && (
           <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3">
             <p className="text-sm font-semibold text-red-700">{errorText}</p>
@@ -626,7 +715,7 @@ export default function DmPage() {
           <div
             ref={listRef}
             onScroll={handleScroll}
-            className="h-[calc(100dvh-230px)] overflow-y-auto px-3 py-3"
+            className="h-[calc(100dvh-230px)] overflow-y-auto px-3 py-3 pb-28"
           >
             {msgs.length === 0 ? (
               <div className="rounded-xl border bg-white p-4 text-sm font-bold text-gray-700 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-200">
@@ -648,61 +737,75 @@ export default function DmPage() {
                         mine ? "flex justify-end" : "flex justify-start"
                       }
                     >
-                      <div
-                        className={[
-                          "max-w-[90%] rounded-2xl border px-3 py-2",
-                          mine
-                            ? "bg-blue-600 text-white border-blue-600"
-                            : "bg-white text-gray-900 dark:bg-gray-950 dark:text-gray-100 dark:border-gray-800",
-                        ].join(" ")}
-                      >
-                        {!mine && (
-                          <div className="mb-1 text-[11px] font-extrabold opacity-80">
-                            {sender}
-                          </div>
-                        )}
-
-                        {/* ✅ 添付（Renova / craftsman 両対応） */}
-                        {media.url && media.kind === "image" && (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img
-                            src={media.url}
-                            alt={media.fileName}
-                            className="mb-2 max-h-64 max-w-full rounded-xl"
-                            loading="lazy"
-                          />
-                        )}
-
-                        {media.url && media.kind === "video" && (
-                          <video
-                            src={media.url}
-                            controls
-                            className="mb-2 max-h-64 max-w-full rounded-xl"
-                          />
-                        )}
-
-                        {media.url &&
-                          (media.kind === "pdf" || media.kind === "link") && (
-                            <a
-                              href={media.url}
-                              target="_blank"
-                              rel="noreferrer"
-                              className={[
-                                "mb-2 inline-flex w-full items-center justify-between gap-2 rounded-xl border bg-white px-3 py-2 text-xs font-extrabold text-gray-900 hover:bg-gray-50",
-                                "dark:border-gray-800 dark:bg-gray-950 dark:text-gray-100 dark:hover:bg-gray-900",
-                                mine ? "" : "",
-                              ].join(" ")}
-                            >
-                              <span className="truncate">
-                                {media.kind === "pdf" ? "📄" : "📎"} {media.fileName || "添付ファイル"}
-                              </span>
-                              <span className="shrink-0">開く</span>
-                            </a>
+                      <div className="max-w-[90%]">
+                        <div
+                          className={[
+                            "rounded-2xl border px-3 py-2",
+                            mine
+                              ? "bg-blue-600 text-white border-blue-600"
+                              : "bg-white text-gray-900 dark:bg-gray-950 dark:text-gray-100 dark:border-gray-800",
+                          ].join(" ")}
+                        >
+                          {!mine && (
+                            <div className="mb-1 text-[11px] font-extrabold opacity-80">
+                              {sender}
+                            </div>
                           )}
 
-                        {body && (
-                          <div className="whitespace-pre-wrap text-sm font-bold leading-relaxed">
-                            {body}
+                          {/* ✅ 添付（Renova / craftsman 両対応） */}
+                          {media.url && media.kind === "image" && (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img
+                              src={media.url}
+                              alt={media.fileName}
+                              className="mb-2 max-h-64 max-w-full rounded-xl"
+                              loading="lazy"
+                            />
+                          )}
+
+                          {media.url && media.kind === "video" && (
+                            <video
+                              src={media.url}
+                              controls
+                              className="mb-2 max-h-64 max-w-full rounded-xl"
+                            />
+                          )}
+
+                          {media.url &&
+                            (media.kind === "pdf" || media.kind === "link") && (
+                              <a
+                                href={media.url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className={[
+                                  "mb-2 inline-flex w-full items-center justify-between gap-2 rounded-xl border bg-white px-3 py-2 text-xs font-extrabold text-gray-900 hover:bg-gray-50",
+                                  "dark:border-gray-800 dark:bg-gray-950 dark:text-gray-100 dark:hover:bg-gray-900",
+                                  mine ? "" : "",
+                                ].join(" ")}
+                              >
+                                <span className="truncate">
+                                  {media.kind === "pdf" ? "📄" : "📎"}{" "}
+                                  {media.fileName || "添付ファイル"}
+                                </span>
+                                <span className="shrink-0">開く</span>
+                              </a>
+                            )}
+
+                          {body && (
+                            <div className="whitespace-pre-wrap text-sm font-bold leading-relaxed">
+                              {body}
+                            </div>
+                          )}
+                        </div>
+
+                        {mine && (
+                          <div className="mt-1 px-1 text-right text-[11px] font-extrabold text-gray-500 dark:text-gray-400">
+                            {(Array.isArray(m.data.readBy)
+                              ? m.data.readBy
+                              : []
+                            ).includes(peerUid)
+                              ? "既読"
+                              : "未読"}
                           </div>
                         )}
                       </div>
@@ -714,16 +817,16 @@ export default function DmPage() {
           </div>
 
           {/* composer */}
-          <div className="border-t bg-white px-3 py-3 dark:border-gray-800 dark:bg-gray-900">
+          <div className="fixed inset-x-0 bottom-0 z-20 border-t bg-white/95 px-3 py-3 backdrop-blur dark:border-gray-800 dark:bg-gray-900/95">
             {sending && (
-              <div className="mb-2 flex items-center gap-2 text-xs font-extrabold text-gray-600 dark:text-gray-300">
+              <div className="mx-auto mb-2 flex w-full max-w-2xl items-center gap-2 text-xs font-extrabold text-gray-600 dark:text-gray-300">
                 <Loader2 className="h-4 w-4 animate-spin" />
                 送信中...
               </div>
             )}
 
             {file && (
-              <div className="mb-2 flex items-center justify-between gap-2 rounded-xl border px-3 py-2 text-xs font-bold dark:border-gray-800">
+              <div className="mx-auto mb-2 flex w-full max-w-2xl items-center justify-between gap-2 rounded-xl border px-3 py-2 text-xs font-bold dark:border-gray-800">
                 <div className="truncate">添付：{file.name}</div>
                 <button
                   type="button"
@@ -735,7 +838,7 @@ export default function DmPage() {
               </div>
             )}
 
-            <div className="flex items-end gap-2">
+            <div className="mx-auto flex w-full max-w-2xl items-end gap-2">
               <label className="shrink-0 inline-flex cursor-pointer items-center justify-center rounded-xl border bg-white p-2 hover:bg-gray-50 dark:border-gray-800 dark:bg-gray-950 dark:hover:bg-gray-900">
                 <Paperclip className="h-5 w-5" />
                 <input
@@ -752,11 +855,13 @@ export default function DmPage() {
               </label>
 
               <textarea
+                ref={textareaRef}
                 value={text}
                 onChange={(e) => setText(e.target.value)}
+                onInput={resizeTextarea}
                 placeholder="メッセージを入力..."
-                rows={2}
-                className="w-full resize-none rounded-xl border px-3 py-2 font-bold text-gray-900
+                rows={1}
+                className="min-h-[44px] max-h-[160px] w-full resize-none overflow-hidden rounded-xl border px-3 py-2 font-bold text-gray-900
                            focus:outline-none dark:border-gray-800 dark:bg-gray-950 dark:text-gray-100"
                 style={{ fontSize: 16 }}
                 disabled={sending}
@@ -782,8 +887,8 @@ export default function DmPage() {
               </button>
             </div>
 
-            <div className="mt-2 text-[11px] font-bold text-gray-500 dark:text-gray-400">
-              ※ 画像/動画/PDFのみ添付可（まずは1件添付対応）
+            <div className="mx-auto mt-2 w-full max-w-2xl text-[11px] font-bold text-gray-500 dark:text-gray-400">
+              ※ 画像/動画/PDFのみ添付可
             </div>
           </div>
         </div>

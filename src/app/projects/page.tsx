@@ -19,6 +19,10 @@ import { auth, db } from "@/lib/firebaseClient";
 
 type Role = "owner" | "member";
 
+function labelRole(role: Role): string {
+  return role === "owner" ? "オーナー" : "メンバー";
+}
+
 // 現場内の役割（ドメイン役割）
 type MemberRole = "manager" | "craftsman" | "resident" | "proclink";
 
@@ -248,9 +252,7 @@ export default function ProjectsPage() {
         <div className="text-lg font-extrabold text-gray-900 dark:text-gray-100">
           工事一覧
         </div>
-        <div className="mt-1 text-xs font-bold text-gray-500 dark:text-gray-400">
-          ログイン: {uid ?? "-"}
-        </div>
+        
 
         <div className="mt-6 grid gap-3">
           {!hasItems ? (
@@ -271,7 +273,7 @@ export default function ProjectsPage() {
                   {p.name}
                 </div>
                 <div className="mt-1 text-xs font-bold text-gray-500 dark:text-gray-400">
-                  role: {p.role} / projectId: {p.id}
+                  権限: {labelRole(p.role)}
                 </div>
               </button>
             ))

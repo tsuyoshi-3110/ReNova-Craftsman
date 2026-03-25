@@ -1,7 +1,13 @@
-// src/app/projects/[projectId]/chat/[roomId]/ChatRoomClient.tsx
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useRouter } from "next/navigation";
 import { onAuthStateChanged } from "firebase/auth";
 import {
@@ -15,6 +21,8 @@ import {
   orderBy,
   query,
   serverTimestamp,
+  setDoc,
+  Timestamp,
   where,
   type DocumentData,
   type QueryDocumentSnapshot,
@@ -39,6 +47,34 @@ type ChatMessage = {
   senderRole?: ChatRole;
   createdAt?: unknown;
 };
+
+type ChatReadState = {
+  uid?: string;
+  name?: string;
+  role?: ChatRole;
+  lastReadAt?: unknown;
+};
+
+function toMillis(v: unknown): number {
+  if (v instanceof Timestamp) return v.toMillis();
+  if (
+    typeof v === "object" &&
+    v !== null &&
+    "seconds" in v &&
+    typeof (v as { seconds: unknown }).seconds === "number"
+  ) {
+    const seconds = (v as { seconds: number }).seconds;
+    const nanoseconds =
+      "nanoseconds" in v &&
+      typeof (v as { nanoseconds?: unknown }).nanoseconds === "number"
+        ? ((v as { nanoseconds: number }).nanoseconds ?? 0)
+        : 0;
+    return seconds * 1000 + Math.floor(nanoseconds / 1000000);
+  }
+  if (v instanceof Date) return v.getTime();
+  if (typeof v === "number") return v;
+  return 0;
+}
 
 type MemberRole = "manager" | "craftsman" | "resident" | "proclink";
 type Role = "owner" | "member";
@@ -112,11 +148,24 @@ export default function ChatRoomClient(props: {
   const [errorText, setErrorText] = useState<string | null>(null);
 
   const [msgs, setMsgs] = useState<Array<{ id: string; data: ChatMessage }>>([]);
+  const [readStates, setReadStates] = useState<Record<string, ChatReadState>>({});
+  const [memberNameMap, setMemberNameMap] = useState<Record<string, string>>({});
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
 
   const listRef = useRef<HTMLDivElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const stickToBottomRef = useRef(true);
+
+  const resizeTextarea = useCallback(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+
+    el.style.height = "auto";
+    const nextHeight = Math.min(el.scrollHeight, 160);
+    el.style.height = `${Math.max(nextHeight, 44)}px`;
+    el.style.overflowY = el.scrollHeight > 160 ? "auto" : "hidden";
+  }, []);
 
   // 1) Auth → projects/{projectId}/members からプロフィール生成
   useEffect(() => {
@@ -147,8 +196,8 @@ export default function ChatRoomClient(props: {
         }
 
         const name =
-          toNonEmptyString(mem.name) ||
           toNonEmptyString(mem.displayName) ||
+          toNonEmptyString(mem.name) ||
           toNonEmptyString(u.displayName) ||
           "不明";
 
@@ -202,6 +251,61 @@ export default function ChatRoomClient(props: {
     return () => unsub();
   }, [projectId, roomId]);
 
+  // 2.25) readStates 購読
+  useEffect(() => {
+    if (!projectId) return;
+
+    const colRef = collection(db, "projects", projectId, "chatRooms", roomId, "readStates");
+    const qy = query(colRef, limit(100));
+
+    const unsub = onSnapshot(
+      qy,
+      (snap) => {
+        const next: Record<string, ChatReadState> = {};
+        snap.forEach((d) => {
+          next[d.id] = d.data() as ChatReadState;
+        });
+        setReadStates(next);
+      },
+      (err) => {
+        console.log("chat readStates onSnapshot error:", err);
+      },
+    );
+
+    return () => unsub();
+  }, [projectId, roomId]);
+
+  // 2.5) members 購読（senderUid から表示名を引く）
+  useEffect(() => {
+    if (!projectId) return;
+
+    const colRef = collection(db, "projects", projectId, "members");
+    const unsub = onSnapshot(
+      colRef,
+      (snap) => {
+        const next: Record<string, string> = {};
+        snap.forEach((d) => {
+          const data = d.data() as ProjectMemberDoc;
+          const uid = toNonEmptyString(data.uid) || d.id;
+          const name =
+            toNonEmptyString(data.displayName) ||
+            toNonEmptyString(data.name) ||
+            "不明";
+
+          if (uid) {
+            next[uid] = name;
+          }
+        });
+        setMemberNameMap(next);
+      },
+      (err) => {
+        console.log("members onSnapshot error:", err);
+      },
+    );
+
+    return () => unsub();
+  }, [projectId]);
+
   // 3) 下追従スクロール
   useEffect(() => {
     const el = listRef.current;
@@ -210,6 +314,10 @@ export default function ChatRoomClient(props: {
     el.scrollTop = el.scrollHeight;
   }, [msgs.length]);
 
+  useLayoutEffect(() => {
+    resizeTextarea();
+  }, [text, resizeTextarea]);
+
   function handleScroll() {
     const el = listRef.current;
     if (!el) return;
@@ -217,6 +325,58 @@ export default function ChatRoomClient(props: {
     const atBottom = el.scrollHeight - (el.scrollTop + el.clientHeight) < threshold;
     stickToBottomRef.current = atBottom;
   }
+
+  async function markRoomAsRead(current: ChatProfile) {
+    try {
+      const ref = doc(
+        db,
+        "projects",
+        current.projectId,
+        "chatRooms",
+        roomId,
+        "readStates",
+        current.uid,
+      );
+
+      await setDoc(
+        ref,
+        {
+          uid: current.uid,
+          name: current.name,
+          role: current.role,
+          projectId: current.projectId,
+          lastReadAt: serverTimestamp(),
+        },
+        { merge: true },
+      );
+    } catch (e) {
+      console.log("mark read error:", e);
+    }
+  }
+
+  useEffect(() => {
+    if (!profile) return;
+
+    void markRoomAsRead(profile);
+
+    const onFocus = () => {
+      void markRoomAsRead(profile);
+    };
+
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") {
+        void markRoomAsRead(profile);
+      }
+    };
+
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisibility);
+
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [profile, msgs.length, roomId]);
 
   async function send() {
     if (!profile) return;
@@ -236,6 +396,9 @@ export default function ChatRoomClient(props: {
       });
 
       setText("");
+      requestAnimationFrame(() => {
+        resizeTextarea();
+      });
       stickToBottomRef.current = true;
     } catch (e) {
       console.log("send message error:", e);
@@ -293,8 +456,22 @@ export default function ChatRoomClient(props: {
     return null;
   }
 
+  const otherReaders = Object.entries(readStates)
+    .filter(([uid]) => uid !== profile.uid)
+    .map(([uid, state]) => ({
+      uid,
+      name: toNonEmptyString(state.name) || memberNameMap[uid] || "不明",
+      readAtMillis: toMillis(state.lastReadAt),
+    }))
+    .filter((reader) => reader.readAtMillis > 0);
+
+  const hasOtherParticipant = otherReaders.length > 0;
+
   return (
-    <main className="min-h-dvh bg-gray-50 dark:bg-gray-950">
+    <main
+      className="flex min-h-0 flex-col overflow-hidden bg-gray-50 dark:bg-gray-950"
+      style={{ height: "var(--app-vh, 100dvh)" }}
+    >
       <div className="sticky top-0 z-10 border-b bg-white/90 backdrop-blur dark:border-gray-800 dark:bg-gray-950/80">
         <div className="mx-auto flex w-full max-w-2xl items-center justify-between gap-3 px-4 py-3">
           <div className="min-w-0">
@@ -309,51 +486,94 @@ export default function ChatRoomClient(props: {
           <button
             type="button"
             onClick={() => router.push(`/projects/${encodeURIComponent(projectId)}/menu`)}
-            className="shrink-0 rounded-xl border bg-white px-3 py-2 text-sm font-extrabold text-gray-900 hover:bg-gray-50
-                       dark:border-gray-800 dark:bg-gray-950 dark:text-gray-100 dark:hover:bg-gray-900"
+            className="shrink-0 rounded-xl border bg-white px-3 py-2 text-sm font-extrabold text-gray-900 hover:bg-gray-50 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-100 dark:hover:bg-gray-900"
           >
             戻る
           </button>
         </div>
       </div>
 
-      <div className="mx-auto w-full max-w-2xl px-3 py-3">
-        <div className="rounded-2xl border bg-white dark:border-gray-800 dark:bg-gray-900 overflow-hidden">
+      <div className="mx-auto flex min-h-0 h-full w-full max-w-2xl flex-1 flex-col px-2 py-2 pb-24 sm:px-3 sm:py-3 sm:pb-26">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border bg-white dark:border-gray-800 dark:bg-gray-900">
           <div
             ref={listRef}
             onScroll={handleScroll}
-            className="h-[calc(100dvh-210px)] overflow-y-auto px-3 py-3"
+            className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-2 py-2 pb-28 sm:px-3 sm:py-3 sm:pb-32"
           >
             {msgs.length === 0 ? (
               <div className="rounded-xl border bg-white p-4 text-sm font-bold text-gray-700 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-200">
                 まだメッセージがありません。
               </div>
             ) : (
-              <div className="grid gap-2">
+              <div className="grid min-w-0 gap-2">
                 {msgs.map((m) => {
-                  const mine = m.data.senderUid === profile.uid;
-                  const sender = toNonEmptyString(m.data.senderName) || "不明";
+                  const senderUid = toNonEmptyString(m.data.senderUid);
+                  const mine = senderUid === profile.uid;
+                  const dmTargetUid = !mine && senderUid ? senderUid : "";
+                  const sender =
+                    (senderUid ? memberNameMap[senderUid] : "") ||
+                    toNonEmptyString(m.data.senderName) ||
+                    "不明";
                   const body = toNonEmptyString(m.data.text);
                   const badge = m.data.senderRole === "manager" ? "監督" : "職人";
+                  const messageMillis = toMillis(m.data.createdAt);
+                  const readersForMessage =
+                    messageMillis > 0
+                      ? otherReaders.filter((reader) => reader.readAtMillis >= messageMillis)
+                      : [];
+                  const isReadByOther = readersForMessage.length > 0;
+                  const readCount = readersForMessage.length;
 
                   return (
-                    <div key={m.id} className={mine ? "flex justify-end" : "flex justify-start"}>
-                      <div
-                        className={[
-                          "max-w-[90%] rounded-2xl border px-3 py-2",
-                          mine
-                            ? "bg-blue-600 text-white border-blue-600"
-                            : "bg-white text-gray-900 dark:bg-gray-950 dark:text-gray-100 dark:border-gray-800",
-                        ].join(" ")}
-                      >
-                        {!mine && (
-                          <div className="mb-1 text-[11px] font-extrabold opacity-80">
-                            {sender}（{badge}）
+                    <div
+                      key={m.id}
+                      className={mine ? "flex justify-end" : "flex justify-start"}
+                    >
+                      <div className="max-w-[90%]">
+                        {mine ? (
+                          <div
+                            className={[
+                              "rounded-2xl border px-3 py-2",
+                              "bg-blue-600 text-white border-blue-600",
+                            ].join(" ")}
+                          >
+                            <div className="whitespace-pre-wrap text-sm font-bold leading-relaxed">
+                              {body}
+                            </div>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled={!dmTargetUid}
+                            onClick={() => {
+                              if (!dmTargetUid) return;
+                              router.push(
+                                `/dm/${encodeURIComponent(dmTargetUid)}?projectId=${encodeURIComponent(projectId)}`,
+                              );
+                            }}
+                            className={[
+                              "w-full rounded-2xl border px-3 py-2 text-left hover:bg-gray-50 disabled:opacity-100",
+                              "bg-white text-gray-900 dark:bg-gray-950 dark:text-gray-100 dark:border-gray-800 dark:hover:bg-gray-900",
+                            ].join(" ")}
+                          >
+                            <div className="mb-1 text-[11px] font-extrabold opacity-80">
+                              {sender}（{badge}）
+                            </div>
+                            <div className="whitespace-pre-wrap text-sm font-bold leading-relaxed">
+                              {body}
+                            </div>
+                          </button>
+                        )}
+
+                        {mine && (
+                          <div className="mt-1 px-1 text-right text-[11px] font-extrabold text-gray-500 dark:text-gray-400">
+                            {hasOtherParticipant
+                              ? isReadByOther
+                                ? `既読 ${readCount}人`
+                                : "未読"
+                              : "未読"}
                           </div>
                         )}
-                        <div className="whitespace-pre-wrap text-sm font-bold leading-relaxed">
-                          {body}
-                        </div>
                       </div>
                     </div>
                   );
@@ -362,15 +582,16 @@ export default function ChatRoomClient(props: {
             )}
           </div>
 
-          <div className="border-t bg-white px-3 py-3 dark:border-gray-800 dark:bg-gray-900">
-            <div className="flex items-end gap-2">
+          <div className="fixed inset-x-0 bottom-0 z-20 border-t bg-white px-2 py-2 pb-[calc(env(safe-area-inset-bottom)+8px)] dark:border-gray-800 dark:bg-gray-900 sm:px-3 sm:py-3 sm:pb-3">
+            <div className="mx-auto flex w-full min-w-0 max-w-2xl items-end gap-2 sm:gap-3">
               <textarea
+                ref={textareaRef}
                 value={text}
                 onChange={(e) => setText(e.target.value)}
+                onInput={resizeTextarea}
                 placeholder="メッセージを入力..."
-                rows={2}
-                className="w-full resize-none rounded-xl border px-3 py-2 font-bold text-gray-900
-                           focus:outline-none dark:border-gray-800 dark:bg-gray-950 dark:text-gray-100"
+                rows={1}
+                className="min-h-11 max-h-40 min-w-0 flex-1 resize-none overflow-hidden rounded-xl border px-3 py-2 font-bold text-gray-900 focus:outline-none dark:border-gray-800 dark:bg-gray-950 dark:text-gray-100"
                 style={{ fontSize: 16 }}
                 disabled={sending}
               />
@@ -378,7 +599,7 @@ export default function ChatRoomClient(props: {
                 type="button"
                 onClick={() => void send()}
                 disabled={sending || !toNonEmptyString(text)}
-                className="shrink-0 rounded-xl bg-blue-600 px-4 py-2 text-sm font-extrabold text-white disabled:opacity-60"
+                className="shrink-0 inline-flex h-10 items-center rounded-xl bg-blue-600 px-4 py-2 text-sm font-extrabold text-white disabled:opacity-60 sm:h-11"
               >
                 送信
               </button>

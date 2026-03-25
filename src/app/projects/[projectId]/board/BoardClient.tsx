@@ -4,7 +4,15 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { onAuthStateChanged } from "firebase/auth";
-import { collection, getDocs, orderBy, query, where } from "firebase/firestore";
+import {
+  collection,
+  getDocs,
+  orderBy,
+  query,
+  where,
+  doc,
+  getDoc,
+} from "firebase/firestore";
 
 import { auth, db } from "@/lib/firebaseClient";
 import { loadCraftsmanSession } from "@/lib/craftsmanSession";
@@ -34,13 +42,11 @@ export default function BoardClient(props: { initialProjectId: string }) {
     [],
   );
 
-  const projectName =
-    (session?.projectId === projectId ? session?.projectName : null) ?? null;
-
   const [ready, setReady] = useState(false); // auth guard 完了
   const [busy, setBusy] = useState(true);
   const [errorText, setErrorText] = useState<string | null>(null);
   const [items, setItems] = useState<Array<{ id: string; data: BoardPdf }>>([]);
+  const [projectName, setProjectName] = useState<string | null>(null);
 
   // auth guard（ログイン必須）
   useEffect(() => {
@@ -53,6 +59,59 @@ export default function BoardClient(props: { initialProjectId: string }) {
     });
     return () => unsub();
   }, [router]);
+
+  useEffect(() => {
+    if (!ready) return;
+    if (!projectId) return;
+
+    // まず session を採用
+    const fromSession =
+      session?.projectId === projectId
+        ? toNonEmptyString(session?.projectName)
+        : "";
+
+    if (fromSession) {
+      setProjectName(fromSession);
+      return;
+    }
+
+    let mounted = true;
+
+    (async () => {
+      try {
+        const snap = await getDoc(doc(db, "projects", projectId));
+        if (!mounted) return;
+
+        if (!snap.exists()) {
+          setProjectName(null);
+          return;
+        }
+
+        const d = snap.data() as {
+          name?: unknown;
+          title?: unknown;
+          projectName?: unknown;
+        };
+
+        // プロジェクト名フィールド候補（あなたの実データに合わせて増やせる）
+        const picked =
+          toNonEmptyString(d.name) ||
+          toNonEmptyString(d.title) ||
+          toNonEmptyString(d.projectName);
+
+        setProjectName(picked || null);
+      } catch (e) {
+        // ここで落ちても掲示板は見せたいので、エラー表示まではしない
+        console.log("project name load error:", e);
+        if (!mounted) return;
+        setProjectName(null);
+      }
+    })();
+
+    return () => {
+      mounted = false;
+    };
+  }, [ready, projectId, session]);
 
   // boardPdfs 取得
   useEffect(() => {
@@ -108,7 +167,7 @@ export default function BoardClient(props: { initialProjectId: string }) {
         <div className="flex items-center justify-between gap-2">
           <div>
             <div className="text-lg font-extrabold text-gray-900 dark:text-gray-100">
-              掲示板（職人用PDF）
+              掲示板
             </div>
             <div className="text-xs font-bold text-gray-500 dark:text-gray-400">
               現場：{projectName || "（名称未設定）"}
@@ -161,7 +220,9 @@ export default function BoardClient(props: { initialProjectId: string }) {
                     {it.data.fileName || "PDF"}
                   </div>
                   <div className="mt-1 text-xs font-bold text-gray-500 dark:text-gray-400">
-                    {it.data.uploadedByEmail ? `by ${it.data.uploadedByEmail}` : ""}
+                    {it.data.uploadedByEmail
+                      ? `by ${it.data.uploadedByEmail}`
+                      : ""}
                   </div>
                   {!url && (
                     <div className="mt-2 text-xs font-bold text-red-600">
@@ -175,7 +236,8 @@ export default function BoardClient(props: { initialProjectId: string }) {
         </div>
 
         <div className="mt-3 text-xs font-bold text-gray-500 dark:text-gray-400">
-          ※ PDFは標準ビューアで開きます。横向きに回転すると横で見れます。ピンチで拡大縮小できます。
+          ※
+          PDFは標準ビューアで開きます。横向きに回転すると横で見れます。ピンチで拡大縮小できます。
         </div>
       </div>
     </main>
