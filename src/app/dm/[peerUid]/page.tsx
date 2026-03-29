@@ -1,3 +1,4 @@
+/* eslint-disable @next/next/no-img-element */
 "use client";
 
 import React, {
@@ -15,6 +16,7 @@ import {
   collection,
   doc,
   getDoc,
+  getDocs,
   limit,
   onSnapshot,
   orderBy,
@@ -66,6 +68,12 @@ type Member = {
   phone?: string;
 };
 
+type ProjectPhotoOption = {
+  id: string;
+  url: string;
+  name: string;
+};
+
 /** -----------------------------
  * Utils
  * ----------------------------*/
@@ -88,38 +96,6 @@ function mapMsg(
     docId: d.id,
     data: d.data() as Msg,
   };
-}
-
-function resolveCreatedAtMs(msg: Msg): number {
-  if (typeof msg.createdAtMs === "number" && Number.isFinite(msg.createdAtMs)) {
-    return msg.createdAtMs;
-  }
-
-  const v = msg.createdAt;
-
-  if (typeof v === "number") return v;
-  if (typeof v === "string") {
-    const t = Date.parse(v);
-    return Number.isFinite(t) ? t : 0;
-  }
-  if (v instanceof Date) return v.getTime();
-
-  if (
-    typeof v === "object" &&
-    v !== null &&
-    "toMillis" in (v as Record<string, unknown>)
-  ) {
-    const fn = (v as { toMillis?: unknown }).toMillis;
-    if (typeof fn === "function") {
-      try {
-        const n = (fn as () => number)();
-        return typeof n === "number" ? n : 0;
-      } catch {
-        return 0;
-      }
-    }
-  }
-  return 0;
 }
 
 // ✅ createdAt（Firestore Timestamp）の seconds/nanoseconds まで使って安定ソートする
@@ -280,6 +256,34 @@ async function uploadAttachment(args: {
   };
 }
 
+function pickPhotoName(data: Record<string, unknown>, fallbackId: string): string {
+  return (
+    toNonEmptyString(data.fileName) ||
+    toNonEmptyString(data.name) ||
+    toNonEmptyString(data.originalFileName) ||
+    `工事写真_${fallbackId}`
+  );
+}
+
+function pickPhotoDirectUrl(data: Record<string, unknown>): string {
+  return (
+    toNonEmptyString(data.url) ||
+    toNonEmptyString(data.imageUrl) ||
+    toNonEmptyString(data.photoUrl) ||
+    toNonEmptyString(data.downloadURL) ||
+    toNonEmptyString(data.downloadUrl) ||
+    toNonEmptyString(data.originalUrl)
+  );
+}
+
+function pickPhotoStoragePath(data: Record<string, unknown>): string {
+  return (
+    toNonEmptyString(data.storagePath) ||
+    toNonEmptyString(data.path) ||
+    toNonEmptyString(data.originalPath)
+  );
+}
+
 function normalizeMedia(msg: Msg): {
   url: string;
   kind: "image" | "video" | "pdf" | "link" | null;
@@ -316,6 +320,36 @@ function normalizeMedia(msg: Msg): {
   return { url: "", kind: null, fileName: "" };
 }
 
+function isImageType(fileType: string): boolean {
+  return fileType.startsWith("image/");
+}
+
+function isVideoType(fileType: string): boolean {
+  return fileType.startsWith("video/");
+}
+
+function isPdfType(fileType: string): boolean {
+  return fileType === "application/pdf";
+}
+
+async function getVideoDurationSeconds(file: File): Promise<number> {
+  return await new Promise<number>((resolve, reject) => {
+    const objectUrl = URL.createObjectURL(file);
+    const video = document.createElement("video");
+    video.preload = "metadata";
+    video.onloadedmetadata = () => {
+      const duration = Number.isFinite(video.duration) ? video.duration : 0;
+      URL.revokeObjectURL(objectUrl);
+      resolve(duration);
+    };
+    video.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      reject(new Error("動画の長さを取得できませんでした。"));
+    };
+    video.src = objectUrl;
+  });
+}
+
 /** -----------------------------
  * Page
  * ----------------------------*/
@@ -350,6 +384,106 @@ export default function DmPage() {
   const [text, setText] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [sending, setSending] = useState(false);
+  const [photoPickerOpen, setPhotoPickerOpen] = useState(false);
+  const [photoPickerLoading, setPhotoPickerLoading] = useState(false);
+  const [photoOptions, setPhotoOptions] = useState<ProjectPhotoOption[]>([]);
+  async function openProjectPhotoPicker() {
+    if (!projectId) return;
+
+    try {
+      setPhotoPickerLoading(true);
+      setErrorText(null);
+
+      const photoColRef = collection(
+        db,
+        "projects",
+        projectId,
+        "subtitles",
+        "RxCGIA3e1fTB0JruN5rY",
+        "workTypes",
+        "za1iNGWvWkmSh7DI1pAW",
+        "photos",
+      );
+
+      const snap = await getDocs(query(photoColRef, limit(100)));
+      const next: ProjectPhotoOption[] = [];
+
+      for (const d of snap.docs) {
+        const raw = d.data() as Record<string, unknown>;
+        let url = pickPhotoDirectUrl(raw);
+
+        if (!url) {
+          const storagePath = pickPhotoStoragePath(raw);
+          if (storagePath) {
+            try {
+              url = await getDownloadURL(storageRef(storage, storagePath));
+            } catch {
+              url = "";
+            }
+          }
+        }
+
+        if (!url) continue;
+
+        next.push({
+          id: d.id,
+          url,
+          name: pickPhotoName(raw, d.id),
+        });
+      }
+
+      setPhotoOptions(next);
+      setPhotoPickerOpen(true);
+    } catch (e) {
+      console.log("load project photos error:", e);
+      setErrorText("工事写真の取得に失敗しました。");
+    } finally {
+      setPhotoPickerLoading(false);
+    }
+  }
+
+  async function sendProjectPhotoAttachment(photo: ProjectPhotoOption) {
+    if (!projectId || !roomId) return;
+
+    try {
+      setSending(true);
+      setErrorText(null);
+
+      const colRef = collection(
+        db,
+        "projects",
+        projectId,
+        "dmRooms",
+        roomId,
+        "messages",
+      );
+
+      const payload: Msg = {
+        text: "",
+        senderUid: meUid,
+        senderName: meName,
+        toUid: peerUid,
+        readBy: [meUid],
+        createdAt: serverTimestamp(),
+        createdAtMs: Date.now(),
+        mediaUrl: photo.url,
+        mediaType: "image",
+        fileName: photo.name,
+        fileUrl: photo.url,
+        fileType: "image/jpeg",
+      };
+
+      await addDoc(colRef, payload);
+
+      setPhotoPickerOpen(false);
+      stickToBottomRef.current = true;
+    } catch (e) {
+      console.log("dm send project photo error:", e);
+      setErrorText("工事写真の送信に失敗しました。通信状況をご確認ください。");
+    } finally {
+      setSending(false);
+    }
+  }
 
   const listRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -379,6 +513,35 @@ export default function DmPage() {
     el.style.height = `${nextHeight}px`;
     el.style.overflowY = el.scrollHeight > 160 ? "auto" : "hidden";
   }, []);
+
+  async function onSelectFile(file: File | null) {
+    if (!file) return;
+
+    const fileType = file.type || "";
+    const allowed =
+      isImageType(fileType) || isVideoType(fileType) || isPdfType(fileType);
+
+    if (!allowed) {
+      setErrorText("画像/動画/PDF以外は添付できません。");
+      return;
+    }
+
+    if (isVideoType(fileType)) {
+      try {
+        const duration = await getVideoDurationSeconds(file);
+        if (duration > 60) {
+          setErrorText("動画は1分以内にしてください。");
+          return;
+        }
+      } catch {
+        setErrorText("動画の長さを確認できませんでした。");
+        return;
+      }
+    }
+
+    setErrorText(null);
+    setFile(file);
+  }
 
   // route guard
   useEffect(() => {
@@ -579,6 +742,7 @@ export default function DmPage() {
     return () => {
       unsubs.forEach((fn) => fn());
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [subscribeKey, projectId, roomId, legacyRoomId, legacyRoomIdReverse]);
 
   useEffect(() => {
@@ -704,7 +868,7 @@ export default function DmPage() {
       </div>
 
       {/* body */}
-      <div className="mx-auto w-full max-w-2xl px-3 pt-3 pb-[96px]">
+      <div className="mx-auto w-full max-w-2xl px-3 pt-3 pb-24">
         {errorText && (
           <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3">
             <p className="text-sm font-semibold text-red-700">{errorText}</p>
@@ -754,7 +918,7 @@ export default function DmPage() {
 
                           {/* ✅ 添付（Renova / craftsman 両対応） */}
                           {media.url && media.kind === "image" && (
-                            // eslint-disable-next-line @next/next/no-img-element
+
                             <img
                               src={media.url}
                               alt={media.fileName}
@@ -816,6 +980,61 @@ export default function DmPage() {
             )}
           </div>
 
+          {photoPickerOpen && (
+            <div
+              className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 px-4"
+              onClick={() => setPhotoPickerOpen(false)}
+            >
+              <div
+                className="w-full max-w-3xl rounded-2xl border bg-white p-4 shadow-xl dark:border-gray-800 dark:bg-gray-900"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div className="text-sm font-extrabold text-gray-900 dark:text-gray-100">
+                    工事写真を選択
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setPhotoPickerOpen(false)}
+                    className="rounded-lg border bg-white px-3 py-1.5 text-xs font-extrabold text-gray-900 hover:bg-gray-50 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-100 dark:hover:bg-gray-900"
+                  >
+                    閉じる
+                  </button>
+                </div>
+
+                {photoPickerLoading ? (
+                  <div className="mt-4 text-sm font-bold text-gray-600 dark:text-gray-300">
+                    読み込み中...
+                  </div>
+                ) : photoOptions.length === 0 ? (
+                  <div className="mt-4 text-sm font-bold text-gray-600 dark:text-gray-300">
+                    送信できる工事写真がありません。
+                  </div>
+                ) : (
+                  <div className="mt-4 grid max-h-[70vh] grid-cols-2 gap-3 overflow-y-auto sm:grid-cols-3 md:grid-cols-4">
+                    {photoOptions.map((photo) => (
+                      <button
+                        key={photo.id}
+                        type="button"
+                        onClick={() => void sendProjectPhotoAttachment(photo)}
+                        disabled={sending}
+                        className="overflow-hidden rounded-xl border bg-white text-left hover:bg-gray-50 disabled:opacity-60 dark:border-gray-800 dark:bg-gray-950 dark:hover:bg-gray-900"
+                      >
+                        <img
+                          src={photo.url}
+                          alt={photo.name}
+                          className="h-32 w-full object-cover"
+                        />
+                        <div className="px-3 py-2 text-xs font-bold text-gray-800 dark:text-gray-100">
+                          <div className="line-clamp-2">{photo.name}</div>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
           {/* composer */}
           <div className="fixed inset-x-0 bottom-0 z-20 border-t bg-white/95 px-3 py-3 backdrop-blur dark:border-gray-800 dark:bg-gray-900/95">
             {sending && (
@@ -845,14 +1064,29 @@ export default function DmPage() {
                   type="file"
                   accept="image/*,video/*,application/pdf"
                   className="hidden"
-                  onChange={(e) => {
-                    const f = e.target.files?.[0] ?? null;
-                    setFile(f);
-                    e.currentTarget.value = "";
+                  onChange={async (e) => {
+                    const input = e.currentTarget;
+                    const f = input.files?.[0] ?? null;
+                    await onSelectFile(f);
+                    input.value = "";
                   }}
                   disabled={sending}
                 />
               </label>
+              <button
+                type="button"
+                onClick={() => void openProjectPhotoPicker()}
+                disabled={sending || photoPickerLoading}
+                aria-label="工事写真添付"
+                title="工事写真添付"
+                className="shrink-0 inline-flex h-10 w-10 items-center justify-center rounded-xl border bg-white text-gray-900 disabled:opacity-60 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-100"
+              >
+                <img
+                  src="/proclinkIcon128.png"
+                  alt="工事写真添付"
+                  className="h-6 w-6 object-contain"
+                />
+              </button>
 
               <textarea
                 ref={textareaRef}
@@ -861,7 +1095,7 @@ export default function DmPage() {
                 onInput={resizeTextarea}
                 placeholder="メッセージを入力..."
                 rows={1}
-                className="min-h-[44px] max-h-[160px] w-full resize-none overflow-hidden rounded-xl border px-3 py-2 font-bold text-gray-900
+                className="min-h-11 max-h-40 w-full resize-none overflow-hidden rounded-xl border px-3 py-2 font-bold text-gray-900
                            focus:outline-none dark:border-gray-800 dark:bg-gray-950 dark:text-gray-100"
                 style={{ fontSize: 16 }}
                 disabled={sending}
@@ -888,7 +1122,7 @@ export default function DmPage() {
             </div>
 
             <div className="mx-auto mt-2 w-full max-w-2xl text-[11px] font-bold text-gray-500 dark:text-gray-400">
-              ※ 画像/動画/PDFのみ添付可
+              ※ 画像/動画/PDFのみ添付可。動画は1分以内です。工事写真添付から現場写真も送信できます。
             </div>
           </div>
         </div>
