@@ -125,7 +125,7 @@ export default function ManagersClient(props: { initialProjectId: string }) {
       } catch (e) {
         console.log("managers list error:", e);
         if (!mounted) return;
-        setErrorText("監督員一覧の取得に失敗しました。");
+        setErrorText("管督員一覧の取得に失敗しました。");
       } finally {
         if (!mounted) return;
         setBusy(false);
@@ -203,7 +203,7 @@ export default function ManagersClient(props: { initialProjectId: string }) {
         <div className="flex items-center justify-between gap-2">
           <div>
             <div className="text-lg font-extrabold text-gray-900 dark:text-gray-100">
-              監督員一覧
+              管督員一覧
             </div>
             <div className="text-xs font-bold text-gray-500 dark:text-gray-400">
               現場ID：{projectId}
@@ -235,7 +235,7 @@ export default function ManagersClient(props: { initialProjectId: string }) {
             </div>
           ) : items.length === 0 ? (
             <div className="rounded-2xl border bg-white p-4 text-sm font-bold text-gray-700 dark:border-gray-800 dark:bg-gray-900 dark:text-gray-200">
-              この現場の監督員が見つかりません。
+              この現場の管督員が見つかりません。
             </div>
           ) : (
             items.map((it) => {
@@ -253,7 +253,9 @@ export default function ManagersClient(props: { initialProjectId: string }) {
                 <button
                   key={it.id}
                   type="button"
-                  onClick={() => router.push(`/dm/${encodeURIComponent(it.id)}`)}
+                  onClick={() =>
+                    router.push(`/dm/${encodeURIComponent(it.id)}`)
+                  }
                   className="rounded-2xl border bg-white p-4 text-left hover:bg-gray-50
                              dark:border-gray-800 dark:bg-gray-900 dark:hover:bg-gray-900/70"
                 >

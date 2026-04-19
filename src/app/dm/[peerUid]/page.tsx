@@ -14,6 +14,7 @@ import {
   addDoc,
   arrayUnion,
   collection,
+  collectionGroup,
   doc,
   getDoc,
   getDocs,
@@ -23,6 +24,7 @@ import {
   query,
   serverTimestamp,
   updateDoc,
+  where,
   type DocumentData,
   type QueryDocumentSnapshot,
 } from "firebase/firestore";
@@ -256,7 +258,10 @@ async function uploadAttachment(args: {
   };
 }
 
-function pickPhotoName(data: Record<string, unknown>, fallbackId: string): string {
+function pickPhotoName(
+  data: Record<string, unknown>,
+  fallbackId: string,
+): string {
   return (
     toNonEmptyString(data.fileName) ||
     toNonEmptyString(data.name) ||
@@ -394,18 +399,13 @@ export default function DmPage() {
       setPhotoPickerLoading(true);
       setErrorText(null);
 
-      const photoColRef = collection(
-        db,
-        "projects",
-        projectId,
-        "subtitles",
-        "RxCGIA3e1fTB0JruN5rY",
-        "workTypes",
-        "za1iNGWvWkmSh7DI1pAW",
-        "photos",
+      const photoColRef = query(
+        collectionGroup(db, "photos"),
+        where("projectId", "==", projectId),
+        limit(100),
       );
 
-      const snap = await getDocs(query(photoColRef, limit(100)));
+      const snap = await getDocs(photoColRef);
       const next: ProjectPhotoOption[] = [];
 
       for (const d of snap.docs) {
@@ -742,7 +742,7 @@ export default function DmPage() {
     return () => {
       unsubs.forEach((fn) => fn());
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [subscribeKey, projectId, roomId, legacyRoomId, legacyRoomIdReverse]);
 
   useEffect(() => {
@@ -918,7 +918,6 @@ export default function DmPage() {
 
                           {/* ✅ 添付（Renova / craftsman 両対応） */}
                           {media.url && media.kind === "image" && (
-
                             <img
                               src={media.url}
                               alt={media.fileName}
@@ -1023,7 +1022,7 @@ export default function DmPage() {
                         <img
                           src={photo.url}
                           alt={photo.name}
-                          className="h-32 w-full object-cover"
+                          className="w-full aspect-video object-contain bg-gray-100 dark:bg-gray-800"
                         />
                         <div className="px-3 py-2 text-xs font-bold text-gray-800 dark:text-gray-100">
                           <div className="line-clamp-2">{photo.name}</div>
@@ -1122,7 +1121,8 @@ export default function DmPage() {
             </div>
 
             <div className="mx-auto mt-2 w-full max-w-2xl text-[11px] font-bold text-gray-500 dark:text-gray-400">
-              ※ 画像/動画/PDFのみ添付可。動画は1分以内です。工事写真添付から現場写真も送信できます。
+              ※
+              画像/動画/PDFのみ添付可。動画は1分以内です。工事写真添付から現場写真も送信できます。
             </div>
           </div>
         </div>

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { onAuthStateChanged, signOut, type User } from "firebase/auth";
 import { doc, getDoc } from "firebase/firestore";
@@ -87,6 +87,16 @@ function addDays(date: Date, days: number): Date {
   return next;
 }
 
+function formatMonthDay(date: Date): string {
+  return `${date.getMonth() + 1}/${date.getDate()}`;
+}
+
+function formatWeekday(date: Date): string {
+  return ["日", "月", "火", "水", "木", "金", "土"][date.getDay()];
+}
+
+const CHART_INSET_PX = 10;
+
 function parseHolidayText(text: string): Set<string> {
   return new Set(
     text
@@ -140,6 +150,8 @@ export default function OverallScheduleClient({
 }) {
   const router = useRouter();
   const session = useMemo(() => loadCraftsmanSession(), []);
+  const chartViewportRef = useRef<HTMLDivElement | null>(null);
+  const chartContentRef = useRef<HTMLDivElement | null>(null);
 
   const resolvedProjectId = useMemo(() => {
     return (
@@ -149,17 +161,15 @@ export default function OverallScheduleClient({
 
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState<User | null>(null);
-  const [profile, setProfile] = useState<CraftsmanProfile | null>(null);
-  const [projectId, setProjectId] = useState("");
-  const [projectName, setProjectName] = useState<string | null>(null);
   const [overall, setOverall] = useState<OverallSavedPayload | null>(null);
+  const [chartScale, setChartScale] = useState(1);
+  const [scaledHeight, setScaledHeight] = useState<number | null>(null);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (u) => {
       try {
         if (!u) {
           setUser(null);
-          setProfile(null);
           setOverall(null);
           setLoading(false);
           router.replace("/login");
@@ -170,7 +180,6 @@ export default function OverallScheduleClient({
 
         const craftsmanSnap = await getDoc(doc(db, "craftsmen", u.uid));
         if (!craftsmanSnap.exists()) {
-          setProfile(null);
           setOverall(null);
           setLoading(false);
           await signOut(auth);
@@ -179,12 +188,9 @@ export default function OverallScheduleClient({
         }
 
         const p = craftsmanSnap.data() as CraftsmanProfile;
-        setProfile(p);
 
         const pickedProjectId = resolvedProjectId;
         if (!pickedProjectId) {
-          setProjectId("");
-          setProjectName(null);
           setOverall(null);
           setLoading(false);
           router.replace("/projects");
@@ -211,9 +217,6 @@ export default function OverallScheduleClient({
           const hit = list.find((x) => x.projectId === pickedProjectId);
           if (hit?.projectName) pickedProjectName = hit.projectName;
         }
-
-        setProjectId(pickedProjectId);
-        setProjectName(pickedProjectName);
 
         saveCraftsmanSession({
           projectId: pickedProjectId,
@@ -242,7 +245,6 @@ export default function OverallScheduleClient({
       } catch (e) {
         console.error("overall schedule load error:", e);
         setUser(null);
-        setProfile(null);
         setOverall(null);
         setLoading(false);
         router.replace("/login");
@@ -275,8 +277,12 @@ export default function OverallScheduleClient({
   }, [overall]);
 
   const chartGridTemplate = useMemo(() => {
-    if (!displayDays.length) return "88px";
-    return `88px repeat(${displayDays.length}, minmax(0, 1fr))`;
+    if (!displayDays.length) return "112px";
+    return `112px repeat(${displayDays.length}, minmax(28px, 1fr))`;
+  }, [displayDays.length]);
+
+  const chartMinWidth = useMemo(() => {
+    return `${112 + displayDays.length * 28}px`;
   }, [displayDays.length]);
 
   const dayHeaderTextClass = useMemo(() => {
@@ -292,16 +298,12 @@ export default function OverallScheduleClient({
     return "text-[10px] sm:text-[11px]";
   }, [displayDays.length]);
 
-  const compactHeaderMode = useMemo(() => {
-    if (displayDays.length >= 45) return "weekEdge" as const;
-    if (displayDays.length >= 35) return "weekEdge" as const;
-    return "full" as const;
-  }, [displayDays.length]);
-
   const weekSegments = useMemo(() => {
     const segments: Array<{
       startIndex: number;
       span: number;
+      startDate: Date;
+      endDate: Date;
       startKey: string;
       endKey: string;
       hasHoliday: boolean;
@@ -328,6 +330,8 @@ export default function OverallScheduleClient({
       segments.push({
         startIndex,
         span: endIndex - startIndex + 1,
+        startDate: startDay,
+        endDate: endDay,
         startKey: ymdKey(startDay),
         endKey: ymdKey(endDay),
         hasHoliday: weekDays.some((d) => holidaySet.has(ymdKey(d))),
@@ -338,6 +342,39 @@ export default function OverallScheduleClient({
 
     return segments;
   }, [displayDays, holidaySet]);
+
+  useEffect(() => {
+    const viewport = chartViewportRef.current;
+    const content = chartContentRef.current;
+
+    if (!viewport || !content) return;
+
+    const updateScale = () => {
+      const viewportWidth = viewport.clientWidth;
+      const usableViewportWidth = Math.max(0, viewportWidth - CHART_INSET_PX);
+      const contentWidth = content.scrollWidth;
+      const nextScale =
+        usableViewportWidth > 0 && contentWidth > 0
+          ? Math.min(1, (usableViewportWidth - 0.5) / contentWidth)
+          : 1;
+
+      setChartScale(nextScale);
+      setScaledHeight(content.scrollHeight * nextScale + CHART_INSET_PX);
+    };
+
+    updateScale();
+
+    const resizeObserver = new ResizeObserver(() => {
+      updateScale();
+    });
+
+    resizeObserver.observe(viewport);
+    resizeObserver.observe(content);
+
+    return () => {
+      resizeObserver.disconnect();
+    };
+  }, [chartMinWidth, overall, rowsByGroup.length, weekSegments.length]);
 
   if (loading) {
     return (
@@ -355,12 +392,6 @@ export default function OverallScheduleClient({
 
   if (!user) return null;
 
-  const name =
-    toNonEmptyString(profile?.name) ||
-    toNonEmptyString(user.displayName) ||
-    "職人";
-  const company = toNonEmptyString(profile?.company);
-
   return (
     <main className="min-h-dvh bg-gray-50 dark:bg-gray-950">
       <div className="mx-auto w-full max-w-7xl px-2 py-2">
@@ -370,138 +401,196 @@ export default function OverallScheduleClient({
               この現場には全体工程表データがありません。
             </div>
           ) : (
-            <div className="overflow-x-hidden rounded-xl border dark:border-gray-800">
+            <div className="rounded-xl border dark:border-gray-800">
               <div
-                className="grid w-full border-b bg-gray-100 dark:border-gray-800 dark:bg-gray-900"
-                style={{ gridTemplateColumns: chartGridTemplate }}
+                ref={chartViewportRef}
+                className="relative overflow-hidden p-1"
+                style={{ height: scaledHeight ?? undefined }}
               >
-                <div className="border-r px-1.5 py-1 text-[10px] font-extrabold sm:px-1.5 sm:py-1.5 sm:text-xs dark:border-gray-800 flex items-center">
-                  工区 / 工種
-                </div>
-
-                {weekSegments.map((seg) => (
+                <div
+                  ref={chartContentRef}
+                  className="absolute left-1 top-1"
+                  style={{
+                    width: chartMinWidth,
+                    transform: `scale(${chartScale})`,
+                    transformOrigin: "top left",
+                  }}
+                >
                   <div
-                    key={`${seg.startIndex}-${seg.span}`}
-                    className={`border-r px-1 py-0.5 text-center leading-none dark:border-gray-800 ${dayHeaderTextClass} ${
-                      seg.hasHoliday
-                        ? "bg-rose-50 text-rose-700 dark:bg-rose-950/30 dark:text-rose-200"
-                        : "text-gray-700 dark:text-gray-200"
-                    }`}
+                    className="grid min-w-full border-b bg-gray-100 dark:border-gray-800 dark:bg-gray-900"
                     style={{
-                      gridColumn: `${seg.startIndex + 2} / span ${seg.span}`,
+                      gridTemplateColumns: chartGridTemplate,
+                      minWidth: chartMinWidth,
                     }}
                   >
-                    <div className="font-bold leading-none whitespace-nowrap overflow-hidden text-ellipsis">
-                      月 {seg.startKey.slice(5)}
+                    <div className="sticky left-0 z-20 border-r bg-gray-100 px-1.5 py-1 text-[10px] font-extrabold sm:px-1.5 sm:py-1.5 sm:text-xs dark:border-gray-800 dark:bg-gray-900 flex items-center">
+                      工区 / 工種
                     </div>
-                    <div className="font-bold leading-none whitespace-nowrap overflow-hidden text-ellipsis">
-                      土 {seg.endKey.slice(5)}
-                    </div>
-                  </div>
-                ))}
-              </div>
 
-              {rowsByGroup.map(({ group, rows }) => (
-                <div
-                  key={group}
-                  className="border-b last:border-b-0 dark:border-gray-800"
-                >
-                  <div className="border-b bg-gray-100 px-1.5 py-[1px] text-[10px] font-extrabold text-gray-900 dark:border-gray-800 dark:bg-gray-900 dark:text-gray-100 leading-none">
-                    {group}
-                  </div>
-
-                  {rows.map((row, rowIndex) => (
-                    <div
-                      key={`${group}-${row.label}-${rowIndex}`}
-                      className="grid w-full"
-                      style={{
-                        gridTemplateColumns: chartGridTemplate,
-                        gridAutoRows: "14px",
-                      }}
-                    >
-                      <div className="border-r px-1.5 py-[1px] text-[9px] font-bold text-gray-900 sm:px-1.5 sm:py-[1px] sm:text-[10px] dark:border-gray-800 dark:text-gray-100 flex items-center min-w-0">
-                        <div className="flex items-center gap-1.5 min-w-0 w-full">
-                          <span
-                            className="inline-block h-2 w-2 rounded-sm sm:h-2.5 sm:w-2.5 shrink-0"
-                            style={{ backgroundColor: row.color }}
-                          />
-                          <span className="block min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap leading-none">
-                            {displayOverallLabel(row.label, row.groupTitle)}
-                          </span>
+                    {weekSegments.map((seg) => (
+                      <div
+                        key={`${seg.startIndex}-${seg.span}`}
+                        className={`border-r px-1 py-0.5 text-center leading-none dark:border-gray-800 ${dayHeaderTextClass} ${
+                          seg.hasHoliday
+                            ? "bg-rose-50 text-rose-700 dark:bg-rose-950/30 dark:text-rose-200"
+                            : "text-gray-700 dark:text-gray-200"
+                        }`}
+                        style={{
+                          gridColumn: `${seg.startIndex + 2} / span ${seg.span}`,
+                        }}
+                      >
+                        <div className="hidden lg:block font-bold leading-none whitespace-nowrap overflow-hidden text-ellipsis">
+                          {formatMonthDay(seg.startDate)} (
+                          {formatWeekday(seg.startDate)}) -{" "}
+                          {formatMonthDay(seg.endDate)} (
+                          {formatWeekday(seg.endDate)})
+                        </div>
+                        <div className="lg:hidden font-bold leading-none whitespace-nowrap overflow-hidden text-ellipsis">
+                          {formatWeekday(seg.startDate)} {seg.startKey.slice(5)}
+                        </div>
+                        <div className="lg:hidden font-bold leading-none whitespace-nowrap overflow-hidden text-ellipsis">
+                          {formatWeekday(seg.endDate)} {seg.endKey.slice(5)}
                         </div>
                       </div>
+                    ))}
 
-                      {displayDays.map((day, dayIndex) => {
-                        const key = ymdKey(day);
-                        const off = holidaySet.has(key);
-                        const mondayBorder =
-                          day.getDay() === 1
-                            ? "border-l-2 border-l-gray-400 dark:border-l-gray-500"
-                            : "";
+                    <div className="sticky left-0 z-20 hidden border-r border-t bg-gray-50 px-1.5 py-1 text-[10px] font-bold text-gray-600 lg:flex items-center dark:border-gray-800 dark:bg-gray-950 dark:text-gray-300">
+                      日付
+                    </div>
 
-                        const active = key >= row.startYmd && key <= row.endYmd;
-                        const prevDay =
-                          dayIndex > 0 ? displayDays[dayIndex - 1] : null;
-                        const nextDay =
-                          dayIndex < displayDays.length - 1
-                            ? displayDays[dayIndex + 1]
-                            : null;
+                    {displayDays.map((day) => {
+                      const key = ymdKey(day);
+                      const off = holidaySet.has(key);
+                      const mondayBorder =
+                        day.getDay() === 1
+                          ? "border-l-2 border-l-gray-400 dark:border-l-gray-500"
+                          : "";
 
-                        const prevActive =
-                          prevDay !== null &&
-                          ymdKey(prevDay) >= row.startYmd &&
-                          ymdKey(prevDay) <= row.endYmd &&
-                          !holidaySet.has(ymdKey(prevDay));
-
-                        const nextActive =
-                          nextDay !== null &&
-                          ymdKey(nextDay) >= row.startYmd &&
-                          ymdKey(nextDay) <= row.endYmd &&
-                          !holidaySet.has(ymdKey(nextDay));
-
-                        const visibleActive = active && !off;
-                        const barStart = visibleActive && !prevActive;
-                        const barEnd = visibleActive && !nextActive;
-
-                        return (
-                          <div
-                            key={`${group}-${row.label}-${key}`}
-                            className={`border-r border-t px-0 py-0 dark:border-gray-800 flex items-center ${mondayBorder} ${
-                              off
-                                ? "bg-rose-50/70 dark:bg-rose-950/20"
-                                : "bg-white dark:bg-gray-950"
-                            }`}
-                          >
-                            {visibleActive ? (
-                              <div
-                                className={`w-full h-2 sm:h-2.5 ${
-                                  barStart && barEnd
-                                    ? "rounded-md"
-                                    : barStart
-                                      ? "rounded-l-md"
-                                      : barEnd
-                                        ? "rounded-r-md"
-                                        : ""
-                                }`}
-                                style={{
-                                  backgroundColor: row.color,
-                                  marginLeft: prevActive ? -1 : 1,
-                                  marginRight: nextActive ? -1 : 1,
-                                  marginTop: "auto",
-                                  marginBottom: "auto",
-                                }}
-                                title={`${displayOverallLabel(row.label, row.groupTitle)} / ${key}`}
-                              />
-                            ) : (
-                              <div className="h-full w-full" />
-                            )}
+                      return (
+                        <div
+                          key={`header-day-${key}`}
+                          className={`hidden border-r border-t px-0.5 py-1 text-center text-[10px] leading-none lg:block dark:border-gray-800 ${mondayBorder} ${
+                            off
+                              ? "bg-rose-50 text-rose-700 dark:bg-rose-950/30 dark:text-rose-200"
+                              : "bg-gray-50 text-gray-700 dark:bg-gray-950 dark:text-gray-200"
+                          }`}
+                        >
+                          <div className="font-bold whitespace-nowrap">
+                            {formatMonthDay(day)}
                           </div>
-                        );
-                      })}
+                          <div className="mt-0.5 text-[9px]">
+                            {formatWeekday(day)}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {rowsByGroup.map(({ group, rows }) => (
+                    <div
+                      key={group}
+                      className="border-b last:border-b-0 dark:border-gray-800"
+                    >
+                      <div className="sticky left-0 z-10 border-b bg-gray-100 px-1.5 py-px text-[10px] font-extrabold text-gray-900 dark:border-gray-800 dark:bg-gray-900 dark:text-gray-100 leading-none">
+                        {group}
+                      </div>
+
+                      {rows.map((row, rowIndex) => (
+                        <div
+                          key={`${group}-${row.label}-${rowIndex}`}
+                          className="grid min-w-full"
+                          style={{
+                            gridTemplateColumns: chartGridTemplate,
+                            gridAutoRows: "14px",
+                            minWidth: chartMinWidth,
+                          }}
+                        >
+                          <div className="sticky left-0 z-10 border-r bg-white px-1.5 py-px text-[9px] font-bold text-gray-900 sm:px-1.5 sm:py-px sm:text-[10px] dark:border-gray-800 dark:bg-gray-900 dark:text-gray-100 flex items-center min-w-0">
+                            <div className="flex items-center gap-1.5 min-w-0 w-full">
+                              <span
+                                className="inline-block h-2 w-2 rounded-sm sm:h-2.5 sm:w-2.5 shrink-0"
+                                style={{ backgroundColor: row.color }}
+                              />
+                              <span className="block min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap leading-none">
+                                {displayOverallLabel(row.label, row.groupTitle)}
+                              </span>
+                            </div>
+                          </div>
+
+                          {displayDays.map((day, dayIndex) => {
+                            const key = ymdKey(day);
+                            const off = holidaySet.has(key);
+                            const mondayBorder =
+                              day.getDay() === 1
+                                ? "border-l-2 border-l-gray-400 dark:border-l-gray-500"
+                                : "";
+
+                            const active =
+                              key >= row.startYmd && key <= row.endYmd;
+                            const prevDay =
+                              dayIndex > 0 ? displayDays[dayIndex - 1] : null;
+                            const nextDay =
+                              dayIndex < displayDays.length - 1
+                                ? displayDays[dayIndex + 1]
+                                : null;
+
+                            const prevActive =
+                              prevDay !== null &&
+                              ymdKey(prevDay) >= row.startYmd &&
+                              ymdKey(prevDay) <= row.endYmd &&
+                              !holidaySet.has(ymdKey(prevDay));
+
+                            const nextActive =
+                              nextDay !== null &&
+                              ymdKey(nextDay) >= row.startYmd &&
+                              ymdKey(nextDay) <= row.endYmd &&
+                              !holidaySet.has(ymdKey(nextDay));
+
+                            const visibleActive = active && !off;
+                            const barStart = visibleActive && !prevActive;
+                            const barEnd = visibleActive && !nextActive;
+
+                            return (
+                              <div
+                                key={`${group}-${row.label}-${key}`}
+                                className={`border-r border-t px-0 py-0 dark:border-gray-800 flex items-center ${mondayBorder} ${
+                                  off
+                                    ? "bg-rose-50/70 dark:bg-rose-950/20"
+                                    : "bg-white dark:bg-gray-950"
+                                }`}
+                              >
+                                {visibleActive ? (
+                                  <div
+                                    className={`w-full h-2 sm:h-2.5 ${
+                                      barStart && barEnd
+                                        ? "rounded-md"
+                                        : barStart
+                                          ? "rounded-l-md"
+                                          : barEnd
+                                            ? "rounded-r-md"
+                                            : ""
+                                    }`}
+                                    style={{
+                                      backgroundColor: row.color,
+                                      marginLeft: prevActive ? -1 : 1,
+                                      marginRight: nextActive ? -1 : 1,
+                                      marginTop: "auto",
+                                      marginBottom: "auto",
+                                    }}
+                                    title={`${displayOverallLabel(row.label, row.groupTitle)} / ${key}`}
+                                  />
+                                ) : (
+                                  <div className="h-full w-full" />
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ))}
                     </div>
                   ))}
                 </div>
-              ))}
+              </div>
             </div>
           )}
         </div>

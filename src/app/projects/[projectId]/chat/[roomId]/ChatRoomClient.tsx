@@ -15,6 +15,7 @@ import { Loader2, Paperclip, Send } from "lucide-react";
 import {
   addDoc,
   collection,
+  collectionGroup,
   doc,
   getDoc,
   getDocs,
@@ -469,18 +470,13 @@ export default function ChatRoomClient(props: {
       setPhotoPickerLoading(true);
       setErrorText(null);
 
-      const photoColRef = collection(
-        db,
-        "projects",
-        projectId,
-        "subtitles",
-        "RxCGIA3e1fTB0JruN5rY",
-        "workTypes",
-        "za1iNGWvWkmSh7DI1pAW",
-        "photos",
+      const photoColRef = query(
+        collectionGroup(db, "photos"),
+        where("projectId", "==", projectId),
+        limit(100),
       );
 
-      const snap = await getDocs(query(photoColRef, limit(100)));
+      const snap = await getDocs(photoColRef);
       const next: ProjectPhotoOption[] = [];
 
       for (const d of snap.docs) {
@@ -993,7 +989,7 @@ export default function ChatRoomClient(props: {
                         <img
                           src={photo.url}
                           alt={photo.name}
-                          className="h-32 w-full object-cover"
+                          className="w-full aspect-video object-contain bg-gray-100 dark:bg-gray-800"
                         />
                         <div className="px-3 py-2 text-xs font-bold text-gray-800 dark:text-gray-100">
                           <div className="line-clamp-2">{photo.name}</div>

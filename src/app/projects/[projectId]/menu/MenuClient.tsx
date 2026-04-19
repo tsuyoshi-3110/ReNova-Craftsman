@@ -83,31 +83,33 @@ export default function MenuClient({
   const [hasOverallSchedule, setHasOverallSchedule] = useState(false);
   const [chatLastReadAtMillis, setChatLastReadAtMillis] = useState(0);
   const [chatUnreadCount, setChatUnreadCount] = useState(0);
-  const checkOverallScheduleExists = useCallback(async (nextProjectId: string) => {
-    const safeProjectId = toNonEmptyString(nextProjectId);
-    if (!safeProjectId) {
-      setHasOverallSchedule(false);
-      return;
-    }
-
-    try {
-      const overallSnap = await getDoc(
-        doc(db, "projects", safeProjectId, "scheduleData", "overall"),
-      );
-
-      if (!overallSnap.exists()) {
+  const checkOverallScheduleExists = useCallback(
+    async (nextProjectId: string) => {
+      const safeProjectId = toNonEmptyString(nextProjectId);
+      if (!safeProjectId) {
         setHasOverallSchedule(false);
         return;
       }
 
-      const data = overallSnap.data() as { shared?: unknown };
-      setHasOverallSchedule(data.shared === true);
-    } catch (e) {
-      console.error("overall schedule check error:", e);
-      setHasOverallSchedule(false);
-    }
-  }, []);
+      try {
+        const overallSnap = await getDoc(
+          doc(db, "projects", safeProjectId, "scheduleData", "overall"),
+        );
 
+        if (!overallSnap.exists()) {
+          setHasOverallSchedule(false);
+          return;
+        }
+
+        const data = overallSnap.data() as { shared?: unknown };
+        setHasOverallSchedule(data.shared === true);
+      } catch (e) {
+        console.error("overall schedule check error:", e);
+        setHasOverallSchedule(false);
+      }
+    },
+    [],
+  );
 
   const checkPeriodChartExists = useCallback(async (nextProjectId: string) => {
     const safeProjectId = toNonEmptyString(nextProjectId);
@@ -397,7 +399,7 @@ export default function MenuClient({
                   全体工程表
                 </div>
                 <div className="mt-1 text-sm text-gray-600 dark:text-gray-300">
-                  ReNova で保持されている全体工程表を表示
+                  ProcNova で保持されている全体工程表を表示
                 </div>
               </button>
             ) : null}
@@ -416,7 +418,7 @@ export default function MenuClient({
                   区間工程表
                 </div>
                 <div className="mt-1 text-sm text-gray-600 dark:text-gray-300">
-                  ReNova で保持されている区間工程表を表示
+                  ProcNova で保持されている区間工程表を表示
                 </div>
               </button>
             ) : null}
@@ -433,7 +435,7 @@ export default function MenuClient({
                 掲示板（職人用PDF）
               </div>
               <div className="mt-1 text-sm text-gray-600 dark:text-gray-300">
-                Renovaの職人用PDFを確認
+                ProcNovaの職人用PDFを確認
               </div>
             </button>
 
@@ -470,10 +472,10 @@ export default function MenuClient({
              dark:border-gray-800 dark:bg-gray-950 dark:hover:bg-gray-900"
             >
               <div className="text-base font-extrabold text-gray-900 dark:text-gray-100">
-                監督員にDM
+                管督員一覧
               </div>
               <div className="mt-1 text-sm text-gray-600 dark:text-gray-300">
-                監督員一覧を開いて個別にDMできます（画像/動画/PDFも送信予定）
+                管督員一覧を開いて個別にDMできます（画像/動画/PDFも送信予定）
               </div>
             </button>
           </div>
