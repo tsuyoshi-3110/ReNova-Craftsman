@@ -163,8 +163,9 @@ export default function ProjectsPage() {
     return () => {
       cancelled = true;
     };
-  }, [uid, loading, joinBusy, autoJoinBusy, autoJoinCode]);
+  }, [uid, loading, joinBusy, autoJoinBusy, autoJoinCode, joinByShareCode]);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   async function joinByShareCode(codeInput: string, options?: { closeModal?: boolean }) {
     const myUid = uid;
     if (!myUid) return false;
