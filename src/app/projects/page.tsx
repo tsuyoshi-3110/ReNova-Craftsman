@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { onAuthStateChanged } from "firebase/auth";
 import {
   collection,
@@ -64,7 +64,6 @@ type CraftsmanProfile = {
 
 export default function ProjectsPage() {
   const router = useRouter();
-  const searchParams = useSearchParams();
 
   const [uid, setUid] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -76,6 +75,7 @@ export default function ProjectsPage() {
   const [joinInfo, setJoinInfo] = useState<string>("");
   const [joinOpen, setJoinOpen] = useState<boolean>(false);
   const [autoJoinBusy, setAutoJoinBusy] = useState<boolean>(false);
+  const [autoJoinCode, setAutoJoinCode] = useState<string>("");
 
   async function loadProjects(myUid: string) {
     const ref = collection(db, "users", myUid, "myProjects");
@@ -123,25 +123,36 @@ export default function ProjectsPage() {
   }, [router]);
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const params = new URLSearchParams(window.location.search);
+    const code = normalizeCode(params.get("code") || "");
+    if (!code) return;
+
+    setAutoJoinCode(code);
+  }, []);
+
+  useEffect(() => {
     if (!uid) return;
     if (loading) return;
     if (joinBusy || autoJoinBusy) return;
-
-    const code = normalizeCode(searchParams.get("code") || "");
-    if (!code) return;
+    if (!autoJoinCode) return;
 
     let cancelled = false;
 
     const run = async () => {
       setAutoJoinBusy(true);
       try {
-        const joined = await joinByShareCode(code, { closeModal: true });
+        const joined = await joinByShareCode(autoJoinCode, { closeModal: true });
         if (!joined || cancelled) return;
 
-        const params = new URLSearchParams(searchParams.toString());
-        params.delete("code");
-        const next = params.toString();
-        router.replace(next ? `/projects?${next}` : "/projects");
+        if (typeof window !== "undefined") {
+          const url = new URL(window.location.href);
+          url.searchParams.delete("code");
+          window.history.replaceState({}, "", url.toString());
+        }
+
+        setAutoJoinCode("");
       } finally {
         if (!cancelled) setAutoJoinBusy(false);
       }
@@ -152,7 +163,7 @@ export default function ProjectsPage() {
     return () => {
       cancelled = true;
     };
-  }, [uid, loading, joinBusy, autoJoinBusy, searchParams, router]);
+  }, [uid, loading, joinBusy, autoJoinBusy, autoJoinCode]);
 
   async function joinByShareCode(codeInput: string, options?: { closeModal?: boolean }) {
     const myUid = uid;
