@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { onAuthStateChanged } from "firebase/auth";
 import {
   collection,
@@ -64,6 +64,7 @@ type CraftsmanProfile = {
 
 export default function ProjectsPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
 
   const [uid, setUid] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -74,6 +75,7 @@ export default function ProjectsPage() {
   const [joinBusy, setJoinBusy] = useState<boolean>(false);
   const [joinInfo, setJoinInfo] = useState<string>("");
   const [joinOpen, setJoinOpen] = useState<boolean>(false);
+  const [autoJoinBusy, setAutoJoinBusy] = useState<boolean>(false);
 
   async function loadProjects(myUid: string) {
     const ref = collection(db, "users", myUid, "myProjects");
@@ -120,20 +122,50 @@ export default function ProjectsPage() {
     return () => unsub();
   }, [router]);
 
-  async function handleJoinByShareCode() {
+  useEffect(() => {
+    if (!uid) return;
+    if (loading) return;
+    if (joinBusy || autoJoinBusy) return;
+
+    const code = normalizeCode(searchParams.get("code") || "");
+    if (!code) return;
+
+    let cancelled = false;
+
+    const run = async () => {
+      setAutoJoinBusy(true);
+      try {
+        const joined = await joinByShareCode(code, { closeModal: true });
+        if (!joined || cancelled) return;
+
+        const params = new URLSearchParams(searchParams.toString());
+        params.delete("code");
+        const next = params.toString();
+        router.replace(next ? `/projects?${next}` : "/projects");
+      } finally {
+        if (!cancelled) setAutoJoinBusy(false);
+      }
+    };
+
+    void run();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [uid, loading, joinBusy, autoJoinBusy, searchParams, router]);
+
+  async function joinByShareCode(codeInput: string, options?: { closeModal?: boolean }) {
     const myUid = uid;
-    if (!myUid) return;
+    if (!myUid) return false;
 
     setErrorText("");
     setJoinInfo("");
 
-    const code = normalizeCode(joinCodeRaw);
+    const code = normalizeCode(codeInput);
     if (!code) {
       setErrorText("シェアコードを入力してください。");
-      return;
+      return false;
     }
-
-    setJoinBusy(true);
 
     try {
       // 1) shareCodes/{code}
@@ -141,19 +173,19 @@ export default function ProjectsPage() {
       const scSnap = await getDoc(scRef);
       if (!scSnap.exists()) {
         setErrorText("シェアコードが見つかりません。");
-        return;
+        return false;
       }
 
       const sc = scSnap.data() as ShareCodeDoc;
       if (sc.enabled === false) {
         setErrorText("このシェアコードは無効です。");
-        return;
+        return false;
       }
 
       const projectId = toStr(sc.projectId);
       if (!projectId) {
         setErrorText("シェアコードの設定が不完全です（projectIdなし）。");
-        return;
+        return false;
       }
 
       // 2) project name / ownerUid を補完
@@ -222,13 +254,22 @@ export default function ProjectsPage() {
 
       setJoinInfo(`参加しました：${projectName || projectId}`);
       setJoinCodeRaw("");
-      setJoinOpen(false);
+      if (options?.closeModal) setJoinOpen(false);
 
       // refresh list
       await loadProjects(myUid);
+      return true;
     } catch (e) {
       console.log("join by share code error:", e);
       setErrorText("参加処理に失敗しました。");
+      return false;
+    }
+  }
+
+  async function handleJoinByShareCode() {
+    setJoinBusy(true);
+    try {
+      await joinByShareCode(joinCodeRaw, { closeModal: true });
     } finally {
       setJoinBusy(false);
     }
@@ -252,7 +293,7 @@ export default function ProjectsPage() {
         <div className="text-lg font-extrabold text-gray-900 dark:text-gray-100">
           工事一覧
         </div>
-        
+
 
         <div className="mt-6 grid gap-3">
           {!hasItems ? (
