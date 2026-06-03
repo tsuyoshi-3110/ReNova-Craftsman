@@ -1,0 +1,577 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isLogin() {
+      return request.auth != null;
+    }
+
+    function isOwner(projectId) {
+      return request.auth != null
+        && get(/databases/$(database)/documents/projects/$(projectId)).data.ownerUid
+          == request.auth.uid;
+    }
+
+    function isAdmin(projectId) {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/projects/$(projectId)/members/$(request.auth.uid))
+        && get(/databases/$(database)/documents/projects/$(projectId)/members/$(request.auth.uid)).data.role == "admin";
+    }
+
+    function isManager(projectId) {
+      return request.auth != null
+        && (isOwner(projectId) || isAdmin(projectId));
+    }
+
+    function isProjectMember(projectId) {
+      return request.auth != null
+        && (
+          isManager(projectId)
+          || exists(/databases/$(database)/documents/projects/$(projectId)/members/$(request.auth.uid))
+        );
+    }
+
+    function isPhotoPublic(projectId) {
+      return exists(/databases/$(database)/documents/projects/$(projectId)/public/config)
+        && get(/databases/$(database)/documents/projects/$(projectId)/public/config).data.photoPublic == true;
+    }
+
+    function isRenovaGroupMember(groupId) {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/renovaGroups/$(groupId)/members/$(request.auth.uid));
+    }
+
+    function isProjectOwnerUid(uid, projectId) {
+      return exists(/databases/$(database)/documents/projects/$(projectId))
+        && get(/databases/$(database)/documents/projects/$(projectId)).data.ownerUid == uid;
+    }
+
+    match /shareCodes/{code} {
+      allow read: if true;
+      allow write: if isLogin();
+    }
+
+    match /projects/{projectId} {
+      allow read: if isLogin();
+
+      allow create: if isLogin()
+        && request.resource.data.ownerUid == request.auth.uid;
+
+      allow update: if isOwner(projectId)
+        && request.resource.data.ownerUid == resource.data.ownerUid;
+
+      allow delete: if isOwner(projectId);
+    }
+
+    match /projects/{projectId}/public/config {
+      allow read: if true;
+      allow create, update, delete: if isManager(projectId);
+    }
+
+    match /projects/{projectId}/boardPdfs/{docId} {
+      allow read: if isProjectMember(projectId);
+
+      allow create: if isProjectMember(projectId)
+        && request.auth != null
+        && request.resource.data.uploadedByUid == request.auth.uid
+        && request.resource.data.target is string
+        && request.resource.data.url is string
+        && request.resource.data.fileName is string
+        && request.resource.data.storagePath is string;
+
+      allow update: if false;
+
+      allow delete: if isProjectMember(projectId)
+        && request.auth != null
+        && (
+          isOwner(projectId)
+          || resource.data.uploadedByUid == request.auth.uid
+        );
+    }
+
+    match /projects/{projectId}/laundry/{docId} {
+      allow read: if true;
+      allow write: if isProjectMember(projectId);
+    }
+
+    match /projects/{projectId}/laundryStatus/{docId} {
+      allow read: if true;
+      allow write: if isProjectMember(projectId);
+    }
+
+    // ✅ 一旦プロジェクト作成の切り分け用に弱める
+    match /projects/{projectId}/members/{uid} {
+      allow read: if isProjectMember(projectId);
+      allow create: if isLogin() && request.auth.uid == uid;
+      allow update, delete: if isOwner(projectId);
+    }
+
+    match /users/{uid} {
+      allow read, write: if isLogin() && request.auth.uid == uid;
+    }
+
+    // ✅ createOwnerProject が users/{uid}/myProjects に書く場合の許可
+    match /users/{uid}/myProjects/{projectId} {
+      allow read, write: if isLogin() && request.auth.uid == uid;
+    }
+
+    // 互換用: users 直下テンプレコレクション
+    match /users/{uid}/stepTemplates/{templateId} {
+      allow read, write: if isLogin() && request.auth.uid == uid;
+    }
+
+    match /users/{uid}/overallTemplates/{templateId} {
+      allow read, write: if isLogin() && request.auth.uid == uid;
+    }
+
+    // 互換用: 旧 users/{uid}/projects ツリー
+    match /users/{uid}/projects/{projectId} {
+      allow read, write: if isLogin() && request.auth.uid == uid;
+    }
+
+    match /users/{uid}/projects/{projectId}/{document=**} {
+      allow read: if isLogin()
+        && (
+          request.auth.uid == uid
+          || (isProjectOwnerUid(uid, projectId) && isProjectMember(projectId))
+        );
+
+      allow write: if isLogin()
+        && (
+          request.auth.uid == uid
+          || (isProjectOwnerUid(uid, projectId) && isManager(projectId))
+        );
+    }
+
+    match /proclinkMember/{memberId} {
+      allow read: if isLogin()
+        && (
+          request.auth.uid == memberId
+          || resource.data.uid == request.auth.uid
+        );
+
+      allow create: if isLogin()
+        && (
+          request.auth.uid == memberId
+          || request.resource.data.uid == request.auth.uid
+        );
+
+      allow update: if isLogin()
+        && (
+          request.auth.uid == memberId
+          || resource.data.uid == request.auth.uid
+          || request.resource.data.uid == request.auth.uid
+        );
+
+      allow delete: if false;
+    }
+
+    match /proclinkMember/{uid}/residentNoticeTemplates/{docId} {
+      allow read, write: if isLogin() && request.auth.uid == uid;
+    }
+
+    match /proclinkMember/{uid}/residentNoticeTemplateOverrides/{templateId} {
+      allow read, write: if isLogin() && request.auth.uid == uid;
+    }
+
+    match /reNovaMember/{memberId} {
+      allow read: if isLogin()
+        && (
+          request.auth.uid == memberId
+          || resource.data.uid == request.auth.uid
+        );
+
+      allow create: if isLogin()
+        && (
+          request.auth.uid == memberId
+          || request.resource.data.uid == request.auth.uid
+        );
+
+      allow update: if isLogin()
+        && (
+          request.auth.uid == memberId
+          || resource.data.uid == request.auth.uid
+          || request.resource.data.uid == request.auth.uid
+        );
+
+      allow delete: if false;
+    }
+
+    match /reNovaMember/{uid}/residentNoticeTemplates/{docId} {
+      allow read, write: if isLogin() && request.auth.uid == uid;
+    }
+
+    match /reNovaMember/{uid}/residentNoticeTemplateOverrides/{templateId} {
+      allow read, write: if isLogin() && request.auth.uid == uid;
+    }
+
+    // =========================
+    // Photos
+    // =========================
+    match /projects/{projectId}/subtitles/{subtitleId}/workTypes/{workTypeId}/photos/{photoId} {
+      allow read: if isProjectMember(projectId) || isPhotoPublic(projectId);
+
+      allow create: if isProjectMember(projectId)
+        && request.auth != null
+        && request.resource.data.shotByUid == request.auth.uid
+        && request.resource.data.projectId == projectId
+        && request.resource.data.subtitleId == subtitleId
+        && request.resource.data.workTypeId == workTypeId
+        && request.resource.data.url is string
+        && request.resource.data.path is string
+        && request.resource.data.width is int
+        && request.resource.data.height is int
+        && request.resource.data.shotAt is timestamp
+        && request.resource.data.shotAt <= request.time
+        && request.resource.data.shotAt >= request.time - duration.value(10, "minute")
+        && (!("kokuban" in request.resource.data) || request.resource.data.kokuban is map);
+
+      // ✅ 工程設定に合わせて写真へ stepId/sectionId を付与・解除できるようにする
+      // - 書き換えは manager(owner/admin) のみ
+      // - 変更可能フィールドは stepId / sectionId のみ（他は不変）
+      allow update: if isManager(projectId)
+        && request.resource.data.diff(resource.data).changedKeys().hasOnly(["stepId", "sectionId"])
+        && request.resource.data.projectId == resource.data.projectId
+        && request.resource.data.subtitleId == resource.data.subtitleId
+        && request.resource.data.workTypeId == resource.data.workTypeId
+        && request.resource.data.shotByUid == resource.data.shotByUid;
+
+      allow delete: if isProjectMember(projectId)
+        && (
+          isManager(projectId)
+          || request.auth.uid == resource.data.shotByUid
+        );
+    }
+
+    match /photoExportJobs/{jobId} {
+      allow read: if request.auth != null && resource.data.ownerUid == request.auth.uid;
+      allow create, update, delete: if false;
+    }
+
+    match /users/{uid}/residentNoticeTemplates/{docId} {
+      allow read: if isLogin() && request.auth.uid == uid;
+
+      allow create, update: if isLogin()
+        && request.auth.uid == uid
+        && request.resource.data.title is string
+        && request.resource.data.text is string
+        && request.resource.data.createdBy == uid;
+
+      allow delete: if isLogin() && request.auth.uid == uid;
+    }
+
+    match /users/{uid}/residentNoticeTemplateOverrides/{templateId} {
+      allow read: if isLogin() && request.auth.uid == uid;
+
+      allow create, update: if isLogin()
+        && request.auth.uid == uid
+        && request.resource.data.createdBy == uid
+        && (!("title" in request.resource.data) || request.resource.data.title is string)
+        && (!("greeting" in request.resource.data) || request.resource.data.greeting is string)
+        && (!("body" in request.resource.data) || request.resource.data.body is string)
+        && (!("periodNote" in request.resource.data) || request.resource.data.periodNote is string)
+        && (!("workItems" in request.resource.data) || request.resource.data.workItems is list)
+        && (!("cautions" in request.resource.data) || request.resource.data.cautions is list)
+        && (!("note" in request.resource.data) || request.resource.data.note is string);
+
+      allow delete: if isLogin() && request.auth.uid == uid;
+    }
+
+    match /projects/{projectId}/subtitles/{subtitleId} {
+      allow read: if isProjectMember(projectId) || isPhotoPublic(projectId);
+      allow create, update, delete: if isManager(projectId);
+    }
+
+    match /projects/{projectId}/subtitles/{subtitleId}/workTypes/{workTypeId} {
+      allow read: if isProjectMember(projectId) || isPhotoPublic(projectId);
+      allow create, update, delete: if isManager(projectId);
+    }
+
+    match /projects/{projectId}/subtitles/{subtitleId}/workTypeSections/{sectionId} {
+      allow read: if isProjectMember(projectId) || isPhotoPublic(projectId);
+      allow create, update, delete: if isManager(projectId);
+    }
+
+    match /projects/{projectId}/subtitles/{subtitleId}/workTypes/{workTypeId}/steps/{stepId} {
+      allow read: if isProjectMember(projectId);
+      allow create, update, delete: if isManager(projectId);
+    }
+
+    match /projects/{projectId}/subtitles/{subtitleId}/workTypes/{workTypeId}/stepSections/{sectionId} {
+      allow read: if isProjectMember(projectId);
+      allow create, update, delete: if isManager(projectId);
+    }
+
+    match /projects/{projectId}/scheduleData/{docId} {
+      allow read: if isProjectMember(projectId);
+      allow create, update, delete: if isManager(projectId);
+    }
+
+    match /projects/{projectId}/excelImports/{document=**} {
+      allow read: if isProjectMember(projectId);
+      allow write: if isProjectMember(projectId);
+    }
+
+    match /projects/{projectId}/materialCalcs/{calcId} {
+      allow read: if isProjectMember(projectId);
+      allow write: if isProjectMember(projectId);
+    }
+
+    match /projects/{projectId}/aiDictionaries/{document=**} {
+      allow read: if isProjectMember(projectId);
+      allow write: if isProjectMember(projectId);
+    }
+
+    match /projects/{projectId}/excelSumsSaved/{sumId} {
+      allow read: if isProjectMember(projectId);
+      allow write: if isProjectMember(projectId);
+    }
+
+    match /projects/{projectId}/excelSumDraft/{uid} {
+      allow read, write: if isProjectMember(projectId) && request.auth.uid == uid;
+    }
+
+    match /projects/{projectId}/excelSumDraft/{uid}/rowChunks/{chunkId} {
+      allow read, write: if isProjectMember(projectId) && request.auth.uid == uid;
+    }
+
+    match /projects/{projectId}/dmRooms/{roomId}/messages/{messageId} {
+      allow read: if isProjectMember(projectId);
+
+      allow create: if isProjectMember(projectId)
+        && request.auth != null
+        && request.resource.data.senderUid == request.auth.uid
+        && request.resource.data.toUid is string
+        && exists(/databases/$(database)/documents/projects/$(projectId)/members/$(request.resource.data.toUid))
+        && request.resource.data.readBy is list
+        && request.resource.data.readBy.hasAll([request.auth.uid]);
+
+      allow update: if isProjectMember(projectId)
+        && request.auth != null
+        && request.resource.data.diff(resource.data).changedKeys().hasOnly(["readBy"])
+        && request.resource.data.readBy is list
+        && request.resource.data.readBy.hasAll(resource.data.readBy)
+        && request.resource.data.readBy.hasAll([request.auth.uid]);
+
+      allow delete: if false;
+    }
+
+    match /projects/{projectId}/chatRooms/{roomId} {
+      allow read: if isProjectMember(projectId);
+
+      allow create, update: if isProjectMember(projectId)
+        && request.auth != null
+        && request.resource.data.id == roomId
+        && request.resource.data.projectId == projectId
+        && request.resource.data.type == "project"
+        && request.resource.data.name is string;
+
+      allow delete: if false;
+    }
+
+    match /projects/{projectId}/chatRooms/{roomId}/messages/{messageId} {
+      allow read: if isProjectMember(projectId);
+
+      allow create: if isProjectMember(projectId)
+        && request.auth != null
+        && request.resource.data.senderUid == request.auth.uid;
+
+      allow update: if isProjectMember(projectId)
+        && request.auth != null
+        && resource.data.senderUid == request.auth.uid
+        && request.resource.data.senderUid == resource.data.senderUid
+        && request.resource.data.senderName == resource.data.senderName
+        && request.resource.data.senderRole == resource.data.senderRole
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.text == resource.data.text
+        && request.resource.data.diff(resource.data).changedKeys().hasOnly([
+          "fileUrl",
+          "fileName",
+          "fileType",
+          "fileSize",
+        ]);
+
+      allow delete: if false;
+    }
+
+    match /projects/{projectId}/chatRooms/{roomId}/readStates/{uid} {
+      allow read: if isProjectMember(projectId);
+
+      allow create, update: if isProjectMember(projectId)
+        && request.auth != null
+        && request.auth.uid == uid
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.projectId == projectId;
+
+      allow delete: if false;
+    }
+
+    match /projects/{projectId}/residentMessages/{messageId} {
+      allow read: if isProjectMember(projectId);
+
+      allow create: if isManager(projectId);
+
+      allow update: if (
+          isManager(projectId)
+          && request.resource.data.diff(resource.data).changedKeys().hasOnly([
+            "text",
+            "updatedAt",
+            "targetScope",
+            "targetGroupTitle",
+            "templateId",
+            "templateTitle",
+          ])
+        )
+        || (
+          isProjectMember(projectId)
+          && request.auth != null
+          && request.resource.data.diff(resource.data).changedKeys().hasOnly(["readBy"])
+        );
+
+      allow delete: if isManager(projectId);
+    }
+
+    match /residentMembers/{uid} {
+      allow read: if request.auth != null
+        && (
+          request.auth.uid == uid
+          || (
+            resource.data.projectId is string
+            && isProjectMember(resource.data.projectId)
+          )
+        );
+
+      allow create: if request.auth != null
+        && (
+          request.auth.uid == uid
+          || (
+            request.resource.data.projectId is string
+            && isManager(request.resource.data.projectId)
+          )
+        );
+
+      allow update: if request.auth != null
+        && (
+          request.auth.uid == uid
+          || (
+            request.resource.data.projectId is string
+            && isManager(request.resource.data.projectId)
+          )
+        );
+
+      allow delete: if request.auth != null
+        && (
+          request.auth.uid == uid
+          || (
+            resource.data.projectId is string
+            && isManager(resource.data.projectId)
+          )
+        );
+    }
+
+    match /userTemplates/{userId}/stepTemplates/{templateId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    match /userTemplates/{userId}/overallTemplates/{templateId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    match /renovaGroups/{groupId} {
+      // グループ一覧取得（現行 UI の所属判定フロー互換）
+      allow read: if isLogin();
+      allow create, update, delete: if false;
+    }
+
+    match /renovaGroups/{groupId}/members/{uid} {
+      allow read: if isLogin();
+      allow create, update, delete: if false;
+    }
+
+    match /renovaGroups/{groupId}/dmRooms/{roomKey}/messages/{messageId} {
+      allow read: if isRenovaGroupMember(groupId);
+
+      allow create: if isRenovaGroupMember(groupId)
+        && request.auth != null
+        && request.resource.data.senderUid == request.auth.uid
+        && request.resource.data.toUid is string
+        && exists(/databases/$(database)/documents/renovaGroups/$(groupId)/members/$(request.resource.data.toUid))
+        && request.resource.data.readBy is list
+        && request.resource.data.readBy.hasAll([request.auth.uid]);
+
+      allow update: if isRenovaGroupMember(groupId)
+        && request.auth != null
+        && request.resource.data.diff(resource.data).changedKeys().hasOnly(["readBy", "acceptedBy"])
+        && (!("readBy" in request.resource.data) || (
+          request.resource.data.readBy is list
+          && request.resource.data.readBy.hasAll(resource.data.readBy)
+          && request.resource.data.readBy.hasAll([request.auth.uid])
+        ))
+        && (!("acceptedBy" in request.resource.data) || (
+          request.resource.data.acceptedBy is list
+          && (!("acceptedBy" in resource.data) || request.resource.data.acceptedBy.hasAll(resource.data.acceptedBy))
+          && request.resource.data.acceptedBy.hasAll([request.auth.uid])
+        ));
+
+      allow delete: if false;
+    }
+
+    match /renovaGroups/{groupId}/groupChats/{roomKey}/messages/{messageId} {
+      allow read: if isRenovaGroupMember(groupId);
+
+      allow create: if isRenovaGroupMember(groupId)
+        && request.auth != null
+        && request.resource.data.senderUid == request.auth.uid
+        && request.resource.data.readBy is list
+        && request.resource.data.readBy.hasAll([request.auth.uid]);
+
+      allow update: if isRenovaGroupMember(groupId)
+        && request.auth != null
+        && request.resource.data.diff(resource.data).changedKeys().hasOnly(["readBy", "acceptedBy"])
+        && (!("readBy" in request.resource.data) || (
+          request.resource.data.readBy is list
+          && request.resource.data.readBy.hasAll(resource.data.readBy)
+          && request.resource.data.readBy.hasAll([request.auth.uid])
+        ))
+        && (!("acceptedBy" in request.resource.data) || (
+          request.resource.data.acceptedBy is list
+          && (!("acceptedBy" in resource.data) || request.resource.data.acceptedBy.hasAll(resource.data.acceptedBy))
+          && request.resource.data.acceptedBy.hasAll([request.auth.uid])
+        ));
+
+      allow delete: if false;
+    }
+
+    match /deviceBindings/{deviceId} {
+      allow read, write: if isLogin();
+    }
+
+    match /publicWorkTemplates/{templateId} {
+      allow read: if isLogin();
+      allow create, update, delete: if isLogin();
+    }
+
+    match /proclinkWorkTypeCodes/{codeId} {
+      allow read: if isLogin();
+      allow create, update: if isLogin();
+      allow delete: if false;
+    }
+
+    match /admin/{uid} {
+      allow read: if request.auth != null && request.auth.uid == uid;
+      allow write: if false;
+    }
+
+    match /referrers/{uid} {
+      allow read: if request.auth != null && request.auth.uid == uid;
+      allow create, update: if request.auth != null && request.auth.uid == uid;
+      allow delete: if false;
+    }
+
+    match /{document=**} {
+      allow read: if isLogin();
+      allow write: if false;
+    }
+  }
+}

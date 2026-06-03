@@ -4,7 +4,12 @@
 import React, { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from "firebase/auth";
+import {
+  onAuthStateChanged,
+  sendPasswordResetEmail,
+  signInWithEmailAndPassword,
+  signOut,
+} from "firebase/auth";
 import { auth } from "@/lib/firebaseClient";
 import { doc, getDoc } from "firebase/firestore";
 import { db } from "@/lib/firebaseClient";
@@ -24,7 +29,9 @@ export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
+  const [resetBusy, setResetBusy] = useState(false);
   const [errorText, setErrorText] = useState<string | null>(null);
+  const [successText, setSuccessText] = useState<string | null>(null);
 
   const [authedUid, setAuthedUid] = useState<string | null>(null);
 
@@ -56,6 +63,35 @@ export default function LoginPage() {
     }
   }
 
+  async function onResetPassword() {
+    setErrorText(null);
+    setSuccessText(null);
+
+    const normalizedEmail = normalizeText(email);
+    if (!normalizedEmail) {
+      setErrorText("先にメールアドレスを入力してください。");
+      return;
+    }
+
+    try {
+      setResetBusy(true);
+      await sendPasswordResetEmail(auth, normalizedEmail);
+      setSuccessText("パスワード再設定メールを送信しました。メールをご確認ください。");
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error("reset password error:", e);
+
+      if (msg.includes("auth/user-not-found")) {
+        setErrorText("このメールのアカウントが見つかりません。メールアドレスをご確認ください。");
+        return;
+      }
+
+      setErrorText("再設定メールの送信に失敗しました。通信状況をご確認ください。");
+    } finally {
+      setResetBusy(false);
+    }
+  }
+
   const canLogin = useMemo(() => {
     return (
       normalizeText(email).length > 0 && normalizeText(password).length > 0
@@ -64,6 +100,7 @@ export default function LoginPage() {
 
   async function onLogin() {
     setErrorText(null);
+    setSuccessText(null);
     if (!canLogin) {
       setErrorText("メールアドレスとパスワードを入力してください。");
       return;
@@ -139,6 +176,12 @@ export default function LoginPage() {
             </div>
           )}
 
+          {successText && (
+            <div className="mt-4 rounded-xl border border-green-200 bg-green-50 px-4 py-3">
+              <p className="text-sm font-bold text-green-700">{successText}</p>
+            </div>
+          )}
+
           {!authedUid && (
             <div className="mt-5 grid gap-3">
               <label className="block">
@@ -172,10 +215,19 @@ export default function LoginPage() {
               <button
                 type="button"
                 onClick={() => void onLogin()}
-                disabled={busy || !canLogin || !!authedUid}
+                disabled={busy || resetBusy || !canLogin || !!authedUid}
                 className="mt-2 w-full rounded-xl bg-blue-600 py-2.5 text-white font-extrabold disabled:opacity-60"
               >
                 {busy ? "ログイン中..." : authedUid ? "ログイン済み" : "ログイン"}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => void onResetPassword()}
+                disabled={busy || resetBusy || !!authedUid}
+                className="text-sm font-extrabold text-blue-600 underline underline-offset-2 disabled:opacity-60"
+              >
+                {resetBusy ? "送信中..." : "パスワードを忘れた方はこちら"}
               </button>
 
               <Link

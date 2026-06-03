@@ -11,7 +11,7 @@ import React, {
 } from "react";
 import { useRouter } from "next/navigation";
 import { onAuthStateChanged } from "firebase/auth";
-import { Loader2, Paperclip, Send } from "lucide-react";
+import { Loader2, Paperclip, Send, X } from "lucide-react";
 import {
   addDoc,
   collection,
@@ -111,6 +111,22 @@ type ProjectPhotoOption = {
   id: string;
   url: string;
   name: string;
+  subtitleId: string;
+  workTypeId: string;
+  shotAt: unknown;
+  shotByName: string;
+};
+
+type SubtitleOption = {
+  id: string;
+  name: string;
+  order: number;
+};
+
+type WorkTypeOption = {
+  id: string;
+  name: string;
+  order: number;
 };
 
 function toNonEmptyString(v: unknown): string {
@@ -193,6 +209,17 @@ function pickPhotoStoragePath(data: Record<string, unknown>): string {
   );
 }
 
+function formatShotAt(v: unknown): string {
+  const ms = toMillis(v);
+  if (!ms) return "";
+  const d = new Date(ms);
+  const mo = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  const h = String(d.getHours()).padStart(2, "0");
+  const min = String(d.getMinutes()).padStart(2, "0");
+  return `${d.getFullYear()}/${mo}/${day} ${h}:${min}`;
+}
+
 async function getMember(
   projectId: string,
   uid: string,
@@ -247,7 +274,12 @@ export default function ChatRoomClient(props: {
   const [uploadingFile, setUploadingFile] = useState(false);
   const [photoPickerOpen, setPhotoPickerOpen] = useState(false);
   const [photoPickerLoading, setPhotoPickerLoading] = useState(false);
+  const [allPhotos, setAllPhotos] = useState<ProjectPhotoOption[]>([]);
   const [photoOptions, setPhotoOptions] = useState<ProjectPhotoOption[]>([]);
+  const [subtitleOptions, setSubtitleOptions] = useState<SubtitleOption[]>([]);
+  const [workTypeOptions, setWorkTypeOptions] = useState<WorkTypeOption[]>([]);
+  const [selectedSubtitleId, setSelectedSubtitleId] = useState<string>("");
+  const [selectedWorkTypeId, setSelectedWorkTypeId] = useState<string>("");
 
   const listRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -463,6 +495,18 @@ export default function ChatRoomClient(props: {
     setSelectedFile(file);
   }
 
+  function filterPhotos(
+    photos: ProjectPhotoOption[],
+    subId: string,
+    wtId: string,
+  ): ProjectPhotoOption[] {
+    return photos.filter(
+      (p) =>
+        (!subId || p.subtitleId === subId) &&
+        (!wtId || p.workTypeId === wtId),
+    );
+  }
+
   async function openProjectPhotoPicker() {
     if (!projectId) return;
 
@@ -470,40 +514,129 @@ export default function ChatRoomClient(props: {
       setPhotoPickerLoading(true);
       setErrorText(null);
 
-      const photoColRef = query(
-        collectionGroup(db, "photos"),
-        where("projectId", "==", projectId),
-        limit(100),
+      // 全写真を取得（subtitleId/workTypeId フィールドを持つ）
+      const photoSnap = await getDocs(
+        query(
+          collectionGroup(db, "photos"),
+          where("projectId", "==", projectId),
+          limit(300),
+        ),
       );
 
-      const snap = await getDocs(photoColRef);
-      const next: ProjectPhotoOption[] = [];
+      type RawPhoto = ProjectPhotoOption & { shotByUid: string };
+      const rawPhotos: RawPhoto[] = [];
+      const subtitleIdSet = new Set<string>();
+      const wtMap: Record<string, Set<string>> = {};
+      const shotByUidSet = new Set<string>();
 
-      for (const d of snap.docs) {
+      for (const d of photoSnap.docs) {
         const raw = d.data() as Record<string, unknown>;
         let url = pickPhotoDirectUrl(raw);
-
         if (!url) {
-          const storagePath = pickPhotoStoragePath(raw);
-          if (storagePath) {
+          const sp = pickPhotoStoragePath(raw);
+          if (sp) {
             try {
-              url = await getDownloadURL(storageRef(storage, storagePath));
+              url = await getDownloadURL(storageRef(storage, sp));
             } catch {
               url = "";
             }
           }
         }
-
         if (!url) continue;
 
-        next.push({
+        const subId = toNonEmptyString(raw.subtitleId);
+        const wtId = toNonEmptyString(raw.workTypeId);
+        const shotByUid = toNonEmptyString(raw.shotByUid);
+        if (subId) {
+          subtitleIdSet.add(subId);
+          if (!wtMap[subId]) wtMap[subId] = new Set();
+          if (wtId) wtMap[subId].add(wtId);
+        }
+        if (shotByUid) shotByUidSet.add(shotByUid);
+
+        rawPhotos.push({
           id: d.id,
           url,
           name: pickPhotoName(raw, d.id),
+          subtitleId: subId,
+          workTypeId: wtId,
+          shotAt: raw.shotAt ?? null,
+          shotByName: "",
+          shotByUid,
         });
       }
 
-      setPhotoOptions(next);
+      // 撮影者名をまとめて取得
+      const shotByUids = Array.from(shotByUidSet);
+      const memberDocs = await Promise.all(
+        shotByUids.map((uid) =>
+          getDoc(doc(db, "projects", projectId, "members", uid)).catch(() => null),
+        ),
+      );
+      const photographerMap: Record<string, string> = {};
+      shotByUids.forEach((uid, i) => {
+        const d = memberDocs[i];
+        if (d?.exists()) {
+          const data = d.data() as Record<string, unknown>;
+          photographerMap[uid] =
+            toNonEmptyString(data.displayName) || toNonEmptyString(data.name);
+        }
+      });
+
+      const loaded: ProjectPhotoOption[] = rawPhotos.map((p) => ({
+        ...p,
+        shotByName: p.shotByUid ? (photographerMap[p.shotByUid] ?? "") : "",
+      }));
+
+      setAllPhotos(loaded);
+
+      // subtitle ドキュメントから表示名を取得（なければ ID をそのまま使う）
+      const subIds = Array.from(subtitleIdSet);
+      const subDocs = await Promise.all(
+        subIds.map((id) =>
+          getDoc(doc(db, "projects", projectId, "subtitles", id)).catch(() => null),
+        ),
+      );
+      const subs: SubtitleOption[] = subIds
+        .map((id, i) => {
+          const raw = subDocs[i]?.exists() ? (subDocs[i]!.data() as Record<string, unknown>) : {};
+          return {
+            id,
+            name: toNonEmptyString(raw.name) || toNonEmptyString(raw.title) || id,
+            order: typeof raw.order === "number" ? raw.order : 0,
+          };
+        })
+        .sort((a, b) => a.order - b.order || a.name.localeCompare(b.name, "ja"));
+      setSubtitleOptions(subs);
+
+      const firstSubId = subs[0]?.id ?? "";
+      setSelectedSubtitleId(firstSubId);
+
+      // workType ドキュメントから表示名を取得
+      const wtIds = firstSubId ? Array.from(wtMap[firstSubId] ?? []) : [];
+      const wtDocs = await Promise.all(
+        wtIds.map((id) =>
+          getDoc(
+            doc(db, "projects", projectId, "subtitles", firstSubId, "workTypes", id),
+          ).catch(() => null),
+        ),
+      );
+      const wts: WorkTypeOption[] = wtIds
+        .map((id, i) => {
+          const raw = wtDocs[i]?.exists() ? (wtDocs[i]!.data() as Record<string, unknown>) : {};
+          return {
+            id,
+            name: toNonEmptyString(raw.name) || toNonEmptyString(raw.title) || id,
+            order: typeof raw.order === "number" ? raw.order : 0,
+          };
+        })
+        .sort((a, b) => a.order - b.order || a.name.localeCompare(b.name, "ja"));
+      setWorkTypeOptions(wts);
+
+      const firstWtId = wts[0]?.id ?? "";
+      setSelectedWorkTypeId(firstWtId);
+
+      setPhotoOptions(filterPhotos(loaded, firstSubId, firstWtId));
       setPhotoPickerOpen(true);
     } catch (e) {
       console.log("load project photos error:", e);
@@ -511,6 +644,48 @@ export default function ChatRoomClient(props: {
     } finally {
       setPhotoPickerLoading(false);
     }
+  }
+
+  async function handleSubtitleChange(subtitleId: string) {
+    setSelectedSubtitleId(subtitleId);
+    setSelectedWorkTypeId("");
+
+    // このサブタイトルに紐づく workType ID を allPhotos から収集
+    const wtIds = Array.from(
+      new Set(
+        allPhotos
+          .filter((p) => p.subtitleId === subtitleId && p.workTypeId)
+          .map((p) => p.workTypeId),
+      ),
+    );
+
+    const wtDocs = await Promise.all(
+      wtIds.map((id) =>
+        getDoc(
+          doc(db, "projects", projectId, "subtitles", subtitleId, "workTypes", id),
+        ).catch(() => null),
+      ),
+    );
+    const wts: WorkTypeOption[] = wtIds
+      .map((id, i) => {
+        const raw = wtDocs[i]?.exists() ? (wtDocs[i]!.data() as Record<string, unknown>) : {};
+        return {
+          id,
+          name: toNonEmptyString(raw.name) || toNonEmptyString(raw.title) || id,
+          order: typeof raw.order === "number" ? raw.order : 0,
+        };
+      })
+      .sort((a, b) => a.order - b.order || a.name.localeCompare(b.name, "ja"));
+    setWorkTypeOptions(wts);
+
+    const firstWtId = wts[0]?.id ?? "";
+    setSelectedWorkTypeId(firstWtId);
+    setPhotoOptions(filterPhotos(allPhotos, subtitleId, firstWtId));
+  }
+
+  function handleWorkTypeChange(workTypeId: string) {
+    setSelectedWorkTypeId(workTypeId);
+    setPhotoOptions(filterPhotos(allPhotos, selectedSubtitleId, workTypeId));
   }
 
   async function sendProjectPhotoAttachment(photo: ProjectPhotoOption) {
@@ -962,10 +1137,54 @@ export default function ChatRoomClient(props: {
                   <button
                     type="button"
                     onClick={() => setPhotoPickerOpen(false)}
-                    className="rounded-lg border bg-white px-3 py-1.5 text-xs font-extrabold text-gray-900 hover:bg-gray-50 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-100 dark:hover:bg-gray-900"
+                    aria-label="閉じる"
+                    className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gray-200 text-gray-700 hover:bg-gray-300 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600"
                   >
-                    閉じる
+                    <X className="h-4 w-4" />
                   </button>
+                </div>
+
+                <div className="mt-3 grid grid-cols-2 gap-3">
+                  <div>
+                    <div className="mb-1 text-xs font-bold text-gray-500 dark:text-gray-400">
+                      サブタイトル
+                    </div>
+                    <select
+                      value={selectedSubtitleId}
+                      onChange={(e) => void handleSubtitleChange(e.target.value)}
+                      disabled={subtitleOptions.length === 0 || photoPickerLoading}
+                      className="w-full rounded-xl border bg-white px-3 py-2 text-sm font-bold text-gray-900 focus:outline-none disabled:opacity-60 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100"
+                    >
+                      {subtitleOptions.length === 0 && (
+                        <option value="">（なし）</option>
+                      )}
+                      {subtitleOptions.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <div className="mb-1 text-xs font-bold text-gray-500 dark:text-gray-400">
+                      工種
+                    </div>
+                    <select
+                      value={selectedWorkTypeId}
+                      onChange={(e) => void handleWorkTypeChange(e.target.value)}
+                      disabled={workTypeOptions.length === 0 || photoPickerLoading}
+                      className="w-full rounded-xl border bg-white px-3 py-2 text-sm font-bold text-gray-900 focus:outline-none disabled:opacity-60 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100"
+                    >
+                      {workTypeOptions.length === 0 && (
+                        <option value="">（なし）</option>
+                      )}
+                      {workTypeOptions.map((w) => (
+                        <option key={w.id} value={w.id}>
+                          {w.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
 
                 {photoPickerLoading ? (
@@ -977,7 +1196,7 @@ export default function ChatRoomClient(props: {
                     送信できる工事写真がありません。
                   </div>
                 ) : (
-                  <div className="mt-4 grid max-h-[70vh] grid-cols-2 gap-3 overflow-y-auto sm:grid-cols-3 md:grid-cols-4">
+                  <div className="mt-4 grid max-h-[55vh] grid-cols-2 gap-3 overflow-y-auto sm:grid-cols-3 md:grid-cols-4">
                     {photoOptions.map((photo) => (
                       <button
                         key={photo.id}
@@ -991,8 +1210,15 @@ export default function ChatRoomClient(props: {
                           alt={photo.name}
                           className="w-full aspect-video object-contain bg-gray-100 dark:bg-gray-800"
                         />
-                        <div className="px-3 py-2 text-xs font-bold text-gray-800 dark:text-gray-100">
-                          <div className="line-clamp-2">{photo.name}</div>
+                        <div className="px-2 py-1.5">
+                          <div className="text-xs font-bold text-gray-800 dark:text-gray-100">
+                            {formatShotAt(photo.shotAt) || photo.name}
+                          </div>
+                          {photo.shotByName && (
+                            <div className="mt-0.5 text-[11px] text-gray-500 dark:text-gray-400 truncate">
+                              {photo.shotByName}
+                            </div>
+                          )}
                         </div>
                       </button>
                     ))}
