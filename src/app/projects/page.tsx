@@ -7,7 +7,7 @@ import {
   collection,
   doc,
   getDoc,
-  getDocs,
+  onSnapshot,
   orderBy,
   query,
   serverTimestamp,
@@ -31,6 +31,7 @@ type MyProjectRow = {
   name: string;
   role: Role; // 権限用
   ownerUid: string;
+  revoked: boolean;
 };
 
 function toStr(v: unknown): string {
@@ -77,27 +78,8 @@ export default function ProjectsPage() {
   const [autoJoinBusy, setAutoJoinBusy] = useState<boolean>(false);
   const [autoJoinCode, setAutoJoinCode] = useState<string>("");
 
-  async function loadProjects(myUid: string) {
-    const ref = collection(db, "users", myUid, "myProjects");
-    const q = query(ref, orderBy("createdAt", "desc"));
-    const snap = await getDocs(q);
-
-    const rows: MyProjectRow[] = snap.docs.map((d) => {
-      const data = d.data() as DocumentData;
-      const projectId = d.id;
-      return {
-        id: projectId,
-        name: toStr(data.projectName) || toStr(data.name) || "(名称未設定)",
-        role: data.role === "member" ? "member" : "owner",
-        ownerUid: toStr(data.ownerUid),
-      };
-    });
-
-    setItems(rows);
-  }
-
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, async (u) => {
+    const unsub = onAuthStateChanged(auth, (u) => {
       setErrorText("");
       if (!u) {
         setUid(null);
@@ -108,19 +90,45 @@ export default function ProjectsPage() {
       }
 
       setUid(u.uid);
-
-      try {
-        setLoading(true);
-        await loadProjects(u.uid);
-      } catch {
-        setErrorText("工事一覧の取得に失敗しました。");
-      } finally {
-        setLoading(false);
-      }
+      setLoading(true);
     });
 
     return () => unsub();
   }, [router]);
+
+  useEffect(() => {
+    if (!uid) return;
+
+    setErrorText("");
+    const ref = collection(db, "users", uid, "myProjects");
+    const q = query(ref, orderBy("createdAt", "desc"));
+
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const rows: MyProjectRow[] = snap.docs.map((d) => {
+          const data = d.data() as DocumentData;
+          const projectId = d.id;
+          return {
+            id: projectId,
+            name: toStr(data.projectName) || toStr(data.name) || "(名称未設定)",
+            role: data.role === "member" ? "member" : "owner",
+            ownerUid: toStr(data.ownerUid),
+            revoked: !!data.revoked,
+          };
+        });
+
+        setItems(rows);
+        setLoading(false);
+      },
+      () => {
+        setErrorText("工事一覧の取得に失敗しました。");
+        setLoading(false);
+      },
+    );
+
+    return () => unsub();
+  }, [uid]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -143,7 +151,9 @@ export default function ProjectsPage() {
     const run = async () => {
       setAutoJoinBusy(true);
       try {
-        const joined = await joinByShareCode(autoJoinCode, { closeModal: true });
+        const joined = await joinByShareCode(autoJoinCode, {
+          closeModal: true,
+        });
         if (!joined || cancelled) return;
 
         if (typeof window !== "undefined") {
@@ -166,7 +176,10 @@ export default function ProjectsPage() {
   }, [uid, loading, joinBusy, autoJoinBusy, autoJoinCode, joinByShareCode]);
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  async function joinByShareCode(codeInput: string, options?: { closeModal?: boolean }) {
+  async function joinByShareCode(
+    codeInput: string,
+    options?: { closeModal?: boolean },
+  ) {
     const myUid = uid;
     if (!myUid) return false;
 
@@ -267,9 +280,6 @@ export default function ProjectsPage() {
       setJoinInfo(`参加しました：${projectName || projectId}`);
       setJoinCodeRaw("");
       if (options?.closeModal) setJoinOpen(false);
-
-      // refresh list
-      await loadProjects(myUid);
       return true;
     } catch (e) {
       console.log("join by share code error:", e);
@@ -306,7 +316,6 @@ export default function ProjectsPage() {
           工事一覧
         </div>
 
-
         <div className="mt-6 grid gap-3">
           {!hasItems ? (
             <div className="rounded-2xl border bg-white p-4 text-sm font-bold text-gray-700 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-200">
@@ -317,17 +326,34 @@ export default function ProjectsPage() {
               <button
                 key={p.id}
                 type="button"
-                onClick={() =>
-                  router.push(`/projects/${encodeURIComponent(p.id)}/menu`)
-                }
-                className="rounded-2xl border bg-white px-4 py-4 text-left hover:bg-gray-50 dark:border-gray-800 dark:bg-gray-950 dark:hover:bg-gray-900"
+                onClick={() => {
+                  if (p.revoked) return;
+                  router.push(`/projects/${encodeURIComponent(p.id)}/menu`);
+                }}
+                className={`rounded-2xl border px-4 py-4 text-left transition-colors ${
+                  p.revoked
+                    ? "cursor-default border-orange-300 bg-orange-50 dark:border-orange-700 dark:bg-orange-950/30"
+                    : "bg-white hover:bg-gray-50 dark:border-gray-800 dark:bg-gray-950 dark:hover:bg-gray-900"
+                }`}
               >
-                <div className="text-sm font-extrabold text-gray-900 dark:text-gray-100">
+                <div
+                  className={`text-sm font-extrabold ${
+                    p.revoked
+                      ? "text-orange-800 dark:text-orange-300"
+                      : "text-gray-900 dark:text-gray-100"
+                  }`}
+                >
                   {p.name}
                 </div>
-                <div className="mt-1 text-xs font-bold text-gray-500 dark:text-gray-400">
-                  権限: {labelRole(p.role)}
-                </div>
+                {p.revoked ? (
+                  <div className="mt-1.5 text-xs font-extrabold text-orange-600 dark:text-orange-400">
+                    ブロックされています
+                  </div>
+                ) : (
+                  <div className="mt-1 text-xs font-bold text-gray-500 dark:text-gray-400">
+                    権限: {labelRole(p.role)}
+                  </div>
+                )}
               </button>
             ))
           )}
