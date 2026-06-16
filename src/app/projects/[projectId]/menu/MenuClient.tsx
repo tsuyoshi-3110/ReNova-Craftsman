@@ -367,8 +367,7 @@ export default function MenuClient({
             <button
               type="button"
               onClick={() => void handleLogout()}
-              className="rounded-xl border bg-white px-3 py-2 text-sm font-extrabold text-gray-900 hover:bg-gray-50
-                         dark:border-gray-800 dark:bg-gray-950 dark:text-gray-100 dark:hover:bg-gray-900"
+              className="rounded-xl border bg-white px-4 py-3 text-sm font-extrabold text-gray-900 hover:bg-gray-50 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-100 dark:hover:bg-gray-900"
             >
               ログアウト
             </button>
@@ -377,8 +376,7 @@ export default function MenuClient({
           <button
             type="button"
             onClick={() => router.push("/projects")}
-            className="mt-4 w-full rounded-xl border bg-white px-3 py-2 text-sm font-extrabold text-gray-900 hover:bg-gray-50
-                         dark:border-gray-800 dark:bg-gray-950 dark:text-gray-100 dark:hover:bg-gray-900"
+            className="mt-4 w-full rounded-xl border bg-white px-3 py-3 text-sm font-extrabold text-gray-900 hover:bg-gray-50 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-100 dark:hover:bg-gray-900"
           >
             工事を切り替える
           </button>

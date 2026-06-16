@@ -252,6 +252,7 @@ export default function RegisterClient() {
             <Field label="名前">
               <input
                 className="w-full rounded-xl border px-3 py-2 dark:bg-gray-950 dark:text-gray-100 dark:border-gray-800"
+                style={{ fontSize: 16 }}
                 value={name}
                 onChange={(ev) => setName(ev.target.value)}
                 disabled={busy}
@@ -262,6 +263,7 @@ export default function RegisterClient() {
             <Field label="住所">
               <input
                 className="w-full rounded-xl border px-3 py-2 dark:bg-gray-950 dark:text-gray-100 dark:border-gray-800"
+                style={{ fontSize: 16 }}
                 value={address}
                 onChange={(ev) => setAddress(ev.target.value)}
                 disabled={busy}
@@ -272,6 +274,7 @@ export default function RegisterClient() {
             <Field label="電話番号">
               <input
                 className="w-full rounded-xl border px-3 py-2 dark:bg-gray-950 dark:text-gray-100 dark:border-gray-800"
+                style={{ fontSize: 16 }}
                 value={phone}
                 onChange={(ev) => {
                   const raw = ev.target.value;
@@ -294,6 +297,7 @@ export default function RegisterClient() {
             <Field label="所属会社名">
               <input
                 className="w-full rounded-xl border px-3 py-2 dark:bg-gray-950 dark:text-gray-100 dark:border-gray-800"
+                style={{ fontSize: 16 }}
                 value={company}
                 onChange={(ev) => setCompany(ev.target.value)}
                 disabled={busy}
@@ -304,6 +308,7 @@ export default function RegisterClient() {
             <Field label="工種">
               <input
                 className="w-full rounded-xl border px-3 py-2 dark:bg-gray-950 dark:text-gray-100 dark:border-gray-800"
+                style={{ fontSize: 16 }}
                 value={workType}
                 onChange={(ev) => setWorkType(ev.target.value)}
                 disabled={busy}
@@ -317,6 +322,7 @@ export default function RegisterClient() {
                 <Field label="メールアドレス">
                   <input
                     className="w-full rounded-xl border px-3 py-2 dark:bg-gray-950 dark:text-gray-100 dark:border-gray-800"
+                style={{ fontSize: 16 }}
                     value={email}
                     onChange={(ev) => setEmail(ev.target.value)}
                     disabled={busy}
@@ -330,6 +336,7 @@ export default function RegisterClient() {
                   <input
                     type="password"
                     className="w-full rounded-xl border px-3 py-2 dark:bg-gray-950 dark:text-gray-100 dark:border-gray-800"
+                style={{ fontSize: 16 }}
                     value={password}
                     onChange={(ev) => setPassword(ev.target.value)}
                     disabled={busy}
@@ -346,7 +353,7 @@ export default function RegisterClient() {
               disabled={
                 busy || (!authedUid ? !canCreateAuth : !canSubmitProfile)
               }
-              className="mt-2 w-full rounded-xl bg-blue-600 py-2.5 text-white font-extrabold disabled:opacity-60"
+              className="mt-2 w-full rounded-xl bg-blue-600 py-3 text-white font-extrabold disabled:opacity-60"
             >
               {busy
                 ? "処理中..."
@@ -359,8 +366,7 @@ export default function RegisterClient() {
               type="button"
               onClick={() => router.push("/login")}
               disabled={busy}
-              className="w-full rounded-xl border bg-white py-2.5 font-extrabold text-gray-900 hover:bg-gray-50 disabled:opacity-60
-                         dark:border-gray-800 dark:bg-gray-950 dark:text-gray-100 dark:hover:bg-gray-900"
+              className="w-full rounded-xl border bg-white py-3 font-extrabold text-gray-900 hover:bg-gray-50 disabled:opacity-60 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-100 dark:hover:bg-gray-900"
             >
               ログイン画面に戻る
             </button>

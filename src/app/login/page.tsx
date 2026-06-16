@@ -190,6 +190,7 @@ export default function LoginPage() {
                 </div>
                 <input
                   className="w-full rounded-xl border px-3 py-2 dark:bg-gray-950 dark:text-gray-100 dark:border-gray-800"
+                  style={{ fontSize: 16 }}
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   disabled={busy}
@@ -205,6 +206,7 @@ export default function LoginPage() {
                 <input
                   type="password"
                   className="w-full rounded-xl border px-3 py-2 dark:bg-gray-950 dark:text-gray-100 dark:border-gray-800"
+                  style={{ fontSize: 16 }}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   disabled={busy}
@@ -216,7 +218,7 @@ export default function LoginPage() {
                 type="button"
                 onClick={() => void onLogin()}
                 disabled={busy || resetBusy || !canLogin || !!authedUid}
-                className="mt-2 w-full rounded-xl bg-blue-600 py-2.5 text-white font-extrabold disabled:opacity-60"
+                className="mt-2 w-full rounded-xl bg-blue-600 py-3 text-white font-extrabold disabled:opacity-60"
               >
                 {busy ? "ログイン中..." : authedUid ? "ログイン済み" : "ログイン"}
               </button>
@@ -225,21 +227,21 @@ export default function LoginPage() {
                 type="button"
                 onClick={() => void onResetPassword()}
                 disabled={busy || resetBusy || !!authedUid}
-                className="text-sm font-extrabold text-blue-600 underline underline-offset-2 disabled:opacity-60"
+                className="block w-full py-3 text-center text-sm font-extrabold text-blue-600 underline underline-offset-2 disabled:opacity-60"
               >
                 {resetBusy ? "送信中..." : "パスワードを忘れた方はこちら"}
               </button>
 
               <Link
                 href="/craftsman/register"
-                className="mt-3 block w-full text-center text-sm font-extrabold text-emerald-700"
+                className="block w-full py-3 text-center text-sm font-extrabold text-emerald-700"
               >
                 proclinkでアカウントお持ちの方はこちらへ
               </Link>
 
               <Link
                 href="/register"
-                className="mt-2 block w-full text-center text-sm font-extrabold text-blue-600"
+                className="block w-full py-3 text-center text-sm font-extrabold text-blue-600"
               >
                 アカウント作成はこちら
               </Link>

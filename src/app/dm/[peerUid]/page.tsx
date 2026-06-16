@@ -33,7 +33,7 @@ import {
   ref as storageRef,
   uploadBytes,
 } from "firebase/storage";
-import { Loader2, Paperclip, Send, X } from "lucide-react";
+import { ArrowLeft, Loader2, Paperclip, Send, X } from "lucide-react";
 
 import { auth, db, storage } from "@/lib/firebaseClient";
 import { loadCraftsmanSession } from "@/lib/craftsmanSession";
@@ -421,7 +421,22 @@ export default function DmPage() {
 
   const [text, setText] = useState("");
   const [file, setFile] = useState<File | null>(null);
+  const [selectedProjectPhotos, setSelectedProjectPhotos] = useState<ProjectPhotoOption[]>([]);
   const [sending, setSending] = useState(false);
+
+  const toggleProjectPhoto = useCallback((photo: ProjectPhotoOption) => {
+    setSelectedProjectPhotos((prev) => {
+      const exists = prev.some((p) => p.id === photo.id);
+      if (exists) return prev.filter((p) => p.id !== photo.id);
+      return [...prev, photo];
+    });
+  }, []);
+
+  const clearProjectPhotos = useCallback(() => setSelectedProjectPhotos([]), []);
+
+  const removeSelectedProjectPhoto = useCallback((photoId: string) => {
+    setSelectedProjectPhotos((prev) => prev.filter((p) => p.id !== photoId));
+  }, []);
   const [photoPickerOpen, setPhotoPickerOpen] = useState(false);
   const [photoPickerLoading, setPhotoPickerLoading] = useState(false);
   const [allPhotos, setAllPhotos] = useState<ProjectPhotoOption[]>([]);
@@ -955,7 +970,8 @@ export default function DmPage() {
 
     const t = toNonEmptyString(text);
     const hasFile = !!file;
-    if (!t && !hasFile) return;
+    const hasPhotos = selectedProjectPhotos.length > 0;
+    if (!t && !hasFile && !hasPhotos) return;
 
     try {
       setSending(true);
@@ -969,6 +985,42 @@ export default function DmPage() {
         roomId,
         "messages",
       );
+
+      // 工事写真を1枚ずつ送信
+      if (!hasFile && hasPhotos) {
+        for (const p of selectedProjectPhotos.filter((p) => !!p.url)) {
+          await addDoc(colRef, {
+            text: "",
+            senderUid: meUid,
+            senderName: meName,
+            toUid: peerUid,
+            readBy: [meUid],
+            createdAt: serverTimestamp(),
+            createdAtMs: Date.now(),
+            mediaUrl: p.url,
+            mediaType: "image",
+            fileName: p.name,
+            fileUrl: p.url,
+            fileType: "image/jpeg",
+          } as Msg);
+        }
+        if (t) {
+          await addDoc(colRef, {
+            text: t,
+            senderUid: meUid,
+            senderName: meName,
+            toUid: peerUid,
+            readBy: [meUid],
+            createdAt: serverTimestamp(),
+            createdAtMs: Date.now(),
+          } as Msg);
+        }
+        setText("");
+        setSelectedProjectPhotos([]);
+        stickToBottomRef.current = true;
+        requestAnimationFrame(() => { resizeTextarea(); });
+        return;
+      }
 
       let media: {
         mediaUrl: string;
@@ -1017,7 +1069,6 @@ export default function DmPage() {
       });
     } catch (e: unknown) {
       console.log("dm send error:", e);
-
       setErrorText("送信に失敗しました。通信状況をご確認ください。");
     } finally {
       setSending(false);
@@ -1048,13 +1099,13 @@ export default function DmPage() {
             type="button"
             onClick={() =>
               router.push(
-                `/managers?projectId=${encodeURIComponent(projectId)}`,
+                `/projects/${encodeURIComponent(projectId)}/managers`,
               )
             }
-            className="shrink-0 rounded-xl border bg-white px-3 py-2 text-sm font-extrabold text-gray-900 hover:bg-gray-50
-                       dark:border-gray-800 dark:bg-gray-950 dark:text-gray-100 dark:hover:bg-gray-900"
+            className="shrink-0 inline-flex h-11 w-11 items-center justify-center rounded-full border bg-white text-gray-900 hover:bg-gray-50 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-100 dark:hover:bg-gray-900"
+            aria-label="戻る"
           >
-            戻る
+            <ArrowLeft className="h-4 w-4" />
           </button>
         </div>
       </div>
@@ -1247,31 +1298,38 @@ export default function DmPage() {
                   </div>
                 ) : (
                   <div className="mt-4 grid max-h-[55vh] grid-cols-2 gap-3 overflow-y-auto sm:grid-cols-3 md:grid-cols-4">
-                    {photoOptions.map((photo) => (
-                      <button
-                        key={photo.id}
-                        type="button"
-                        onClick={() => void sendProjectPhotoAttachment(photo)}
-                        disabled={sending}
-                        className="overflow-hidden rounded-xl border bg-white text-left hover:bg-gray-50 disabled:opacity-60 dark:border-gray-800 dark:bg-gray-950 dark:hover:bg-gray-900"
-                      >
-                        <img
-                          src={photo.url}
-                          alt={photo.name}
-                          className="w-full aspect-video object-contain bg-gray-100 dark:bg-gray-800"
-                        />
-                        <div className="px-2 py-1.5">
-                          <div className="text-xs font-bold text-gray-800 dark:text-gray-100">
-                            {formatShotAt(photo.shotAt) || photo.name}
-                          </div>
-                          {photo.shotByName && (
-                            <div className="mt-0.5 text-[11px] text-gray-500 dark:text-gray-400 truncate">
-                              {photo.shotByName}
+                    {photoOptions.map((photo) => {
+                      const selected = selectedProjectPhotos.some((p) => p.id === photo.id);
+                      return (
+                        <button
+                          key={photo.id}
+                          type="button"
+                          aria-pressed={selected}
+                          onClick={() => toggleProjectPhoto(photo)}
+                          className={
+                            selected
+                              ? "overflow-hidden rounded-xl border-2 border-blue-500 bg-white text-left dark:border-blue-400 dark:bg-gray-950"
+                              : "overflow-hidden rounded-xl border bg-white text-left hover:bg-gray-50 dark:border-gray-800 dark:bg-gray-950 dark:hover:bg-gray-900"
+                          }
+                        >
+                          <img
+                            src={photo.url}
+                            alt={photo.name}
+                            className="w-full aspect-video object-contain bg-gray-100 dark:bg-gray-800"
+                          />
+                          <div className="px-2 py-1.5">
+                            <div className="text-xs font-bold text-gray-800 dark:text-gray-100">
+                              {formatShotAt(photo.shotAt) || photo.name}
                             </div>
-                          )}
-                        </div>
-                      </button>
-                    ))}
+                            {photo.shotByName && (
+                              <div className="mt-0.5 text-[11px] text-gray-500 dark:text-gray-400 truncate">
+                                {photo.shotByName}
+                              </div>
+                            )}
+                          </div>
+                        </button>
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -1283,6 +1341,39 @@ export default function DmPage() {
               <div className="mx-auto mb-2 flex w-full max-w-2xl items-center gap-2 text-xs font-extrabold text-gray-600 dark:text-gray-300">
                 <Loader2 className="h-4 w-4 animate-spin" />
                 送信中...
+              </div>
+            )}
+
+            {selectedProjectPhotos.length > 0 && (
+              <div className="mx-auto mb-2 w-full max-w-2xl rounded-xl border px-3 py-2 text-xs font-bold dark:border-gray-800">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="truncate">工事写真: {selectedProjectPhotos.length}枚</div>
+                  <button
+                    type="button"
+                    onClick={clearProjectPhotos}
+                    className="rounded-lg border px-2 py-1 text-xs font-extrabold hover:bg-gray-50 dark:border-gray-800 dark:hover:bg-gray-900"
+                  >
+                    全て取消
+                  </button>
+                </div>
+                <div className="mt-2 grid grid-cols-4 gap-2">
+                  {selectedProjectPhotos.map((p) => (
+                    <div key={p.id} className="relative overflow-hidden rounded-lg border border-black/10 dark:border-white/10">
+                      <img
+                        src={p.url}
+                        alt={p.name}
+                        className="h-14 w-full bg-gray-100 object-contain dark:bg-gray-900"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => removeSelectedProjectPhoto(p.id)}
+                        className="absolute right-0.5 top-0.5 rounded bg-black/60 px-1 py-0.5 text-[10px] font-extrabold text-white hover:bg-black/80"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
 
@@ -1319,15 +1410,10 @@ export default function DmPage() {
                 type="button"
                 onClick={() => void openProjectPhotoPicker()}
                 disabled={sending || photoPickerLoading}
-                aria-label="工事写真添付"
-                title="工事写真添付"
-                className="shrink-0 inline-flex h-10 w-10 items-center justify-center rounded-xl border bg-white text-gray-900 disabled:opacity-60 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-100"
+                aria-label="工事写真"
+                className="shrink-0 inline-flex h-10 items-center justify-center rounded-xl border bg-white px-3 text-xs font-bold text-gray-900 disabled:opacity-60 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-100"
               >
-                <img
-                  src="/proclinkIcon128.png"
-                  alt="工事写真添付"
-                  className="h-6 w-6 object-contain"
-                />
+                工事写真
               </button>
 
               <textarea
@@ -1346,7 +1432,7 @@ export default function DmPage() {
               <button
                 type="button"
                 onClick={() => void send()}
-                disabled={sending || (!toNonEmptyString(text) && !file)}
+                disabled={sending || (!toNonEmptyString(text) && !file && selectedProjectPhotos.length === 0)}
                 className="shrink-0 inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-sm font-extrabold text-white disabled:opacity-60"
               >
                 {sending ? (

@@ -11,7 +11,7 @@ import React, {
 } from "react";
 import { useRouter } from "next/navigation";
 import { onAuthStateChanged } from "firebase/auth";
-import { Loader2, Paperclip, Send, X } from "lucide-react";
+import { ArrowLeft, Loader2, Paperclip, Send, X } from "lucide-react";
 import {
   addDoc,
   collection,
@@ -280,6 +280,7 @@ export default function ChatRoomClient(props: {
   const [workTypeOptions, setWorkTypeOptions] = useState<WorkTypeOption[]>([]);
   const [selectedSubtitleId, setSelectedSubtitleId] = useState<string>("");
   const [selectedWorkTypeId, setSelectedWorkTypeId] = useState<string>("");
+  const [selectedProjectPhotos, setSelectedProjectPhotos] = useState<ProjectPhotoOption[]>([]);
 
   const listRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -695,43 +696,19 @@ export default function ChatRoomClient(props: {
     setPhotoOptions(filterPhotos(allPhotos, selectedSubtitleId, workTypeId));
   }
 
-  async function sendProjectPhotoAttachment(photo: ProjectPhotoOption) {
-    if (!profile) return;
+  const toggleProjectPhoto = useCallback((photo: ProjectPhotoOption) => {
+    setSelectedProjectPhotos((prev) => {
+      const exists = prev.some((p) => p.id === photo.id);
+      if (exists) return prev.filter((p) => p.id !== photo.id);
+      return [...prev, photo];
+    });
+  }, []);
 
-    try {
-      setSending(true);
-      setErrorText(null);
+  const clearProjectPhotos = useCallback(() => setSelectedProjectPhotos([]), []);
 
-      const colRef = collection(
-        db,
-        "projects",
-        projectId,
-        "chatRooms",
-        roomId,
-        "messages",
-      );
-
-      await addDoc(colRef, {
-        text: "",
-        senderUid: profile.uid,
-        senderName: profile.name,
-        senderRole: profile.role,
-        createdAt: serverTimestamp(),
-        fileUrl: photo.url,
-        fileName: photo.name,
-        fileType: "image/jpeg",
-        fileSize: 0,
-      });
-
-      setPhotoPickerOpen(false);
-      stickToBottomRef.current = true;
-    } catch (e) {
-      console.log("send project photo error:", e);
-      setErrorText("工事写真の送信に失敗しました。通信状況をご確認ください。");
-    } finally {
-      setSending(false);
-    }
-  }
+  const removeSelectedProjectPhoto = useCallback((photoId: string) => {
+    setSelectedProjectPhotos((prev) => prev.filter((p) => p.id !== photoId));
+  }, []);
 
   const markRoomAsRead = useCallback(async (current: ChatProfile) => {
     try {
@@ -788,7 +765,7 @@ export default function ChatRoomClient(props: {
   async function send() {
     if (!profile) return;
     const t = toNonEmptyString(text);
-    if (!t && !selectedFile) return;
+    if (!t && !selectedFile && selectedProjectPhotos.length === 0) return;
 
     try {
       setSending(true);
@@ -803,6 +780,27 @@ export default function ChatRoomClient(props: {
         roomId,
         "messages",
       );
+
+      // 工事写真を一括送信
+      if (selectedProjectPhotos.length > 0) {
+        await Promise.all(
+          selectedProjectPhotos.map((photo) =>
+            addDoc(colRef, {
+              text: "",
+              senderUid: profile.uid,
+              senderName: profile.name,
+              senderRole: profile.role,
+              createdAt: serverTimestamp(),
+              fileUrl: photo.url,
+              fileName: photo.name,
+              fileType: "image/jpeg",
+              fileSize: 0,
+            }),
+          ),
+        );
+        setSelectedProjectPhotos([]);
+        setPhotoPickerOpen(false);
+      }
 
       if (selectedFile) {
         const messageRef = await addDoc(colRef, {
@@ -834,7 +832,7 @@ export default function ChatRoomClient(props: {
           fileType: selectedFile.type || "application/octet-stream",
           fileSize: selectedFile.size || 0,
         });
-      } else {
+      } else if (t) {
         await addDoc(colRef, {
           text: t,
           senderUid: profile.uid,
@@ -942,9 +940,10 @@ export default function ChatRoomClient(props: {
             onClick={() =>
               router.push(`/projects/${encodeURIComponent(projectId)}/menu`)
             }
-            className="shrink-0 rounded-xl border bg-white px-3 py-2 text-sm font-extrabold text-gray-900 hover:bg-gray-50 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-100 dark:hover:bg-gray-900"
+            className="shrink-0 inline-flex h-11 w-11 items-center justify-center rounded-full border bg-white text-gray-900 hover:bg-gray-50 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-100 dark:hover:bg-gray-900"
+            aria-label="戻る"
           >
-            戻る
+            <ArrowLeft className="h-4 w-4" />
           </button>
         </div>
       </div>
@@ -1202,33 +1201,56 @@ export default function ChatRoomClient(props: {
                     送信できる工事写真がありません。
                   </div>
                 ) : (
-                  <div className="mt-4 grid max-h-[55vh] grid-cols-2 gap-3 overflow-y-auto sm:grid-cols-3 md:grid-cols-4">
-                    {photoOptions.map((photo) => (
-                      <button
-                        key={photo.id}
-                        type="button"
-                        onClick={() => void sendProjectPhotoAttachment(photo)}
-                        disabled={sending}
-                        className="overflow-hidden rounded-xl border bg-white text-left hover:bg-gray-50 disabled:opacity-60 dark:border-gray-800 dark:bg-gray-950 dark:hover:bg-gray-900"
-                      >
-                        <img
-                          src={photo.url}
-                          alt={photo.name}
-                          className="w-full aspect-video object-contain bg-gray-100 dark:bg-gray-800"
-                        />
-                        <div className="px-2 py-1.5">
-                          <div className="text-xs font-bold text-gray-800 dark:text-gray-100">
-                            {formatShotAt(photo.shotAt) || photo.name}
-                          </div>
-                          {photo.shotByName && (
-                            <div className="mt-0.5 text-[11px] text-gray-500 dark:text-gray-400 truncate">
-                              {photo.shotByName}
+                  <>
+                    <div className="mt-4 grid max-h-[55vh] grid-cols-2 gap-3 overflow-y-auto sm:grid-cols-3 md:grid-cols-4">
+                      {photoOptions.map((photo) => {
+                        const isSelected = selectedProjectPhotos.some((p) => p.id === photo.id);
+                        return (
+                          <button
+                            key={photo.id}
+                            type="button"
+                            onClick={() => toggleProjectPhoto(photo)}
+                            className={[
+                              "overflow-hidden rounded-xl border text-left",
+                              isSelected
+                                ? "border-2 border-blue-500 bg-blue-50 dark:bg-blue-950"
+                                : "border-gray-200 bg-white hover:bg-gray-50 dark:border-gray-800 dark:bg-gray-950 dark:hover:bg-gray-900",
+                            ].join(" ")}
+                          >
+                            <img
+                              src={photo.url}
+                              alt={photo.name}
+                              className="w-full aspect-video object-contain bg-gray-100 dark:bg-gray-800"
+                            />
+                            <div className="px-2 py-1.5">
+                              <div className="text-xs font-bold text-gray-800 dark:text-gray-100">
+                                {formatShotAt(photo.shotAt) || photo.name}
+                              </div>
+                              {photo.shotByName && (
+                                <div className="mt-0.5 text-[11px] text-gray-500 dark:text-gray-400 truncate">
+                                  {photo.shotByName}
+                                </div>
+                              )}
                             </div>
-                          )}
-                        </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="mt-3 flex justify-end">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (selectedProjectPhotos.length > 0) {
+                            setPhotoPickerOpen(false);
+                          }
+                        }}
+                        disabled={selectedProjectPhotos.length === 0}
+                        className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-extrabold text-white disabled:opacity-40"
+                      >
+                        全て添付（{selectedProjectPhotos.length}枚）
                       </button>
-                    ))}
-                  </div>
+                    </div>
+                  </>
                 )}
               </div>
             </div>
@@ -1245,6 +1267,57 @@ export default function ChatRoomClient(props: {
                 await onSelectFile(file);
               }}
             />
+            {selectedProjectPhotos.length > 0 && (
+              <div className="mx-auto mb-2 w-full max-w-2xl rounded-xl border px-3 py-2 text-xs font-bold dark:border-gray-800">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="truncate">工事写真: {selectedProjectPhotos.length}枚</div>
+                  <button
+                    type="button"
+                    onClick={clearProjectPhotos}
+                    className="rounded-lg border px-2 py-1 text-xs font-extrabold hover:bg-gray-50 dark:border-gray-800 dark:hover:bg-gray-900"
+                  >
+                    全て取消
+                  </button>
+                </div>
+                <div className="mt-2 grid grid-cols-4 gap-2">
+                  {selectedProjectPhotos.map((p) => (
+                    <div key={p.id} className="relative overflow-hidden rounded-lg border border-black/10 dark:border-white/10">
+                      <img
+                        src={p.url}
+                        alt={p.name}
+                        className="h-14 w-full bg-gray-100 object-contain dark:bg-gray-900"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => removeSelectedProjectPhoto(p.id)}
+                        className="absolute right-0.5 top-0.5 rounded bg-black/60 px-1 py-0.5 text-[10px] font-extrabold text-white hover:bg-black/80"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {selectedFile && (
+              <div className="mx-auto mb-2 flex w-full max-w-2xl items-center justify-between gap-2 rounded-xl border px-3 py-2 text-xs font-bold dark:border-gray-800">
+                <div className="truncate">添付：{selectedFile.name}</div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedFile(null);
+                    if (fileInputRef.current) {
+                      fileInputRef.current.value = "";
+                    }
+                  }}
+                  className="shrink-0 rounded-lg border px-2 py-1 text-xs font-extrabold hover:bg-gray-50 dark:border-gray-800 dark:hover:bg-gray-900"
+                >
+                  外す
+                </button>
+              </div>
+            )}
+
             <div className="mx-auto flex w-full min-w-0 max-w-2xl items-end gap-2 sm:gap-3">
               <button
                 type="button"
@@ -1263,13 +1336,9 @@ export default function ChatRoomClient(props: {
                 disabled={sending || photoPickerLoading || uploadingFile}
                 aria-label="工事写真添付"
                 title="工事写真添付"
-                className="shrink-0 inline-flex h-10 w-10 items-center justify-center rounded-xl border bg-white text-gray-900 disabled:opacity-60 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-100 sm:h-11 sm:w-11"
+                className="shrink-0 inline-flex h-10 items-center justify-center rounded-xl border bg-white px-2 text-xs font-extrabold text-gray-900 disabled:opacity-60 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-100"
               >
-                <img
-                  src="/proclinkIcon128.png"
-                  alt="工事写真添付"
-                  className="h-6 w-6 object-contain"
-                />
+                工事写真
               </button>
 
               <textarea
@@ -1290,7 +1359,7 @@ export default function ChatRoomClient(props: {
                 disabled={
                   sending ||
                   uploadingFile ||
-                  (!toNonEmptyString(text) && !selectedFile)
+                  (!toNonEmptyString(text) && !selectedFile && selectedProjectPhotos.length === 0)
                 }
                 className="shrink-0 inline-flex h-10 items-center gap-1 rounded-xl bg-blue-600 px-2.5 py-2 text-sm font-extrabold text-white disabled:opacity-60 sm:h-11 sm:gap-2 sm:px-4"
               >
@@ -1307,27 +1376,6 @@ export default function ChatRoomClient(props: {
                 )}
               </button>
             </div>
-
-            {selectedFile ? (
-              <div className="mx-auto mt-2 w-full max-w-2xl text-[11px] font-bold text-gray-600 dark:text-gray-300">
-                添付予定: {selectedFile.name}
-                {selectedFile.size
-                  ? ` (${formatFileSize(selectedFile.size)})`
-                  : ""}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSelectedFile(null);
-                    if (fileInputRef.current) {
-                      fileInputRef.current.value = "";
-                    }
-                  }}
-                  className="ml-2 underline"
-                >
-                  取消
-                </button>
-              </div>
-            ) : null}
 
             <div className="mx-auto mt-2 w-full max-w-2xl text-[11px] font-bold text-gray-500 dark:text-gray-400">
               ※

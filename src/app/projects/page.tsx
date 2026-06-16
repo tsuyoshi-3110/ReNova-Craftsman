@@ -373,8 +373,8 @@ export default function ProjectsPage() {
           setJoinInfo("");
           setJoinOpen(true);
         }}
-        className="fixed bottom-6 right-6 z-50 flex h-14 w-14 items-center justify-center rounded-full bg-gray-900 text-white shadow-lg hover:opacity-90
-                   dark:bg-white dark:text-gray-900"
+        className="fixed z-50 flex h-14 w-14 items-center justify-center rounded-full bg-gray-900 text-white shadow-lg hover:opacity-90 dark:bg-white dark:text-gray-900"
+        style={{ bottom: "calc(1.5rem + env(safe-area-inset-bottom))", right: "1.5rem" }}
         aria-label="工事に参加"
       >
         <span className="text-3xl leading-none">+</span>
@@ -399,8 +399,7 @@ export default function ProjectsPage() {
                   type="button"
                   onClick={() => setJoinOpen(false)}
                   aria-label="閉じる"
-                  className="absolute left-0 top-0 rounded-xl border bg-white px-3 py-2 text-sm font-extrabold text-gray-900 hover:bg-gray-50
-                             dark:border-gray-800 dark:bg-gray-950 dark:text-gray-100 dark:hover:bg-gray-900"
+                  className="absolute left-0 top-0 inline-flex h-11 w-11 items-center justify-center rounded-full border bg-white text-gray-900 hover:bg-gray-50 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-100 dark:hover:bg-gray-900"
                 >
                   ×
                 </button>
@@ -420,8 +419,7 @@ export default function ProjectsPage() {
                   type="button"
                   onClick={() => void handleJoinByShareCode()}
                   disabled={joinBusy}
-                  className="shrink-0 rounded-xl border bg-white px-3 py-2 text-sm font-extrabold text-gray-900 hover:bg-gray-50 disabled:opacity-50
-                             dark:border-gray-800 dark:bg-gray-950 dark:text-gray-100 dark:hover:bg-gray-900"
+                  className="shrink-0 rounded-xl border bg-white px-4 py-3 text-sm font-extrabold text-gray-900 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-100 dark:hover:bg-gray-900"
                 >
                   参加
                 </button>
@@ -448,8 +446,7 @@ export default function ProjectsPage() {
                   type="button"
                   onClick={() => setJoinOpen(false)}
                   disabled={joinBusy}
-                  className="rounded-xl border bg-white px-3 py-2 text-sm font-extrabold text-gray-900 hover:bg-gray-50 disabled:opacity-50
-                             dark:border-gray-800 dark:bg-gray-950 dark:text-gray-100 dark:hover:bg-gray-900"
+                  className="rounded-xl border bg-white px-4 py-3 text-sm font-extrabold text-gray-900 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-100 dark:hover:bg-gray-900"
                 >
                   キャンセル
                 </button>

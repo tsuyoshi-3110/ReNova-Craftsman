@@ -30,8 +30,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
-      <body className="antialiased">
+    <html lang="ja">
+      <body className="overflow-x-hidden antialiased">
         <div className="pb-20">{children}</div>
       </body>
     </html>

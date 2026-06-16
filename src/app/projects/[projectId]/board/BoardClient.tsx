@@ -2,6 +2,7 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
+import { ArrowLeft } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { onAuthStateChanged } from "firebase/auth";
 import {
@@ -179,10 +180,10 @@ export default function BoardClient(props: { initialProjectId: string }) {
             onClick={() =>
               router.push(`/projects/${encodeURIComponent(projectId)}/menu`)
             }
-            className="rounded-xl border bg-white px-3 py-2 text-sm font-extrabold text-gray-900 hover:bg-gray-50
-                       dark:border-gray-800 dark:bg-gray-950 dark:text-gray-100 dark:hover:bg-gray-900"
+            className="inline-flex h-11 w-11 items-center justify-center rounded-full border bg-white text-gray-900 hover:bg-gray-50 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-100 dark:hover:bg-gray-900"
+            aria-label="戻る"
           >
-            戻る
+            <ArrowLeft className="h-4 w-4" />
           </button>
         </div>
 

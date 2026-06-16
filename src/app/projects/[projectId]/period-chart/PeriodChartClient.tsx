@@ -131,13 +131,6 @@ function weekdayLabel(date: Date): string {
   return ["日", "月", "火", "水", "木", "金", "土"][date.getDay()] ?? "";
 }
 
-function isWeekend(date: Date, saturdayOff: boolean): boolean {
-  const day = date.getDay();
-  if (day === 0) return true;
-  if (day === 6 && saturdayOff) return true;
-  return false;
-}
-
 export default function PeriodChartClient({
   initialProjectId,
 }: {
@@ -154,9 +147,6 @@ export default function PeriodChartClient({
 
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState<User | null>(null);
-  const [profile, setProfile] = useState<CraftsmanProfile | null>(null);
-  const [projectId, setProjectId] = useState("");
-  const [projectName, setProjectName] = useState<string | null>(null);
   const [chart, setChart] = useState<PeriodChartSavedPayload | null>(null);
 
   useEffect(() => {
@@ -164,7 +154,6 @@ export default function PeriodChartClient({
       try {
         if (!u) {
           setUser(null);
-          setProfile(null);
           setChart(null);
           setLoading(false);
           router.replace("/login");
@@ -175,7 +164,6 @@ export default function PeriodChartClient({
 
         const craftsmanSnap = await getDoc(doc(db, "craftsmen", u.uid));
         if (!craftsmanSnap.exists()) {
-          setProfile(null);
           setChart(null);
           setLoading(false);
           await signOut(auth);
@@ -184,12 +172,9 @@ export default function PeriodChartClient({
         }
 
         const p = craftsmanSnap.data() as CraftsmanProfile;
-        setProfile(p);
 
         const pickedProjectId = resolvedProjectId;
         if (!pickedProjectId) {
-          setProjectId("");
-          setProjectName(null);
           setChart(null);
           setLoading(false);
           router.replace("/projects");
@@ -216,9 +201,6 @@ export default function PeriodChartClient({
           const hit = list.find((x) => x.projectId === pickedProjectId);
           if (hit?.projectName) pickedProjectName = hit.projectName;
         }
-
-        setProjectId(pickedProjectId);
-        setProjectName(pickedProjectName);
 
         saveCraftsmanSession({
           projectId: pickedProjectId,
@@ -247,7 +229,6 @@ export default function PeriodChartClient({
       } catch (e) {
         console.error("period chart load error:", e);
         setUser(null);
-        setProfile(null);
         setChart(null);
         setLoading(false);
         router.replace("/login");
@@ -313,12 +294,6 @@ export default function PeriodChartClient({
   }
 
   if (!user) return null;
-
-  const name =
-    toNonEmptyString(profile?.name) ||
-    toNonEmptyString(user.displayName) ||
-    "職人";
-  const company = toNonEmptyString(profile?.company);
 
   return (
     <main className="min-h-dvh bg-gray-50 dark:bg-gray-950">
