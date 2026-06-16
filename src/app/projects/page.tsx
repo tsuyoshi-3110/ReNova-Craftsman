@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { onAuthStateChanged } from "firebase/auth";
 import {
@@ -130,56 +130,10 @@ export default function ProjectsPage() {
     return () => unsub();
   }, [uid]);
 
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-
-    const params = new URLSearchParams(window.location.search);
-    const code = normalizeCode(params.get("code") || "");
-    if (!code) return;
-
-    setAutoJoinCode(code);
-  }, []);
-
-  useEffect(() => {
-    if (!uid) return;
-    if (loading) return;
-    if (joinBusy || autoJoinBusy) return;
-    if (!autoJoinCode) return;
-
-    let cancelled = false;
-
-    const run = async () => {
-      setAutoJoinBusy(true);
-      try {
-        const joined = await joinByShareCode(autoJoinCode, {
-          closeModal: true,
-        });
-        if (!joined || cancelled) return;
-
-        if (typeof window !== "undefined") {
-          const url = new URL(window.location.href);
-          url.searchParams.delete("code");
-          window.history.replaceState({}, "", url.toString());
-        }
-
-        setAutoJoinCode("");
-      } finally {
-        if (!cancelled) setAutoJoinBusy(false);
-      }
-    };
-
-    void run();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [uid, loading, joinBusy, autoJoinBusy, autoJoinCode, joinByShareCode]);
-
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  async function joinByShareCode(
+  const joinByShareCode = useCallback(async (
     codeInput: string,
     options?: { closeModal?: boolean },
-  ) {
+  ) => {
     const myUid = uid;
     if (!myUid) return false;
 
@@ -286,7 +240,52 @@ export default function ProjectsPage() {
       setErrorText("参加処理に失敗しました。");
       return false;
     }
-  }
+  }, [uid]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const params = new URLSearchParams(window.location.search);
+    const code = normalizeCode(params.get("code") || "");
+    if (!code) return;
+
+    setAutoJoinCode(code);
+  }, []);
+
+  useEffect(() => {
+    if (!uid) return;
+    if (loading) return;
+    if (joinBusy || autoJoinBusy) return;
+    if (!autoJoinCode) return;
+
+    let cancelled = false;
+
+    const run = async () => {
+      setAutoJoinBusy(true);
+      try {
+        const joined = await joinByShareCode(autoJoinCode, {
+          closeModal: true,
+        });
+        if (!joined || cancelled) return;
+
+        if (typeof window !== "undefined") {
+          const url = new URL(window.location.href);
+          url.searchParams.delete("code");
+          window.history.replaceState({}, "", url.toString());
+        }
+
+        setAutoJoinCode("");
+      } finally {
+        if (!cancelled) setAutoJoinBusy(false);
+      }
+    };
+
+    void run();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [uid, loading, joinBusy, autoJoinBusy, autoJoinCode, joinByShareCode]);
 
   async function handleJoinByShareCode() {
     setJoinBusy(true);

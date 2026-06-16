@@ -599,7 +599,8 @@ export default function ChatRoomClient(props: {
       );
       const subs: SubtitleOption[] = subIds
         .map((id, i) => {
-          const raw = subDocs[i]?.exists() ? (subDocs[i]!.data() as Record<string, unknown>) : {};
+          const d = subDocs[i];
+          const raw = d?.exists() ? (d.data() as Record<string, unknown>) : {};
           return {
             id,
             name: toNonEmptyString(raw.name) || toNonEmptyString(raw.title) || id,
@@ -623,7 +624,8 @@ export default function ChatRoomClient(props: {
       );
       const wts: WorkTypeOption[] = wtIds
         .map((id, i) => {
-          const raw = wtDocs[i]?.exists() ? (wtDocs[i]!.data() as Record<string, unknown>) : {};
+          const d = wtDocs[i];
+          const raw = d?.exists() ? (d.data() as Record<string, unknown>) : {};
           return {
             id,
             name: toNonEmptyString(raw.name) || toNonEmptyString(raw.title) || id,
@@ -650,37 +652,42 @@ export default function ChatRoomClient(props: {
     setSelectedSubtitleId(subtitleId);
     setSelectedWorkTypeId("");
 
-    // このサブタイトルに紐づく workType ID を allPhotos から収集
-    const wtIds = Array.from(
-      new Set(
-        allPhotos
-          .filter((p) => p.subtitleId === subtitleId && p.workTypeId)
-          .map((p) => p.workTypeId),
-      ),
-    );
+    try {
+      // このサブタイトルに紐づく workType ID を allPhotos から収集
+      const wtIds = Array.from(
+        new Set(
+          allPhotos
+            .filter((p) => p.subtitleId === subtitleId && p.workTypeId)
+            .map((p) => p.workTypeId),
+        ),
+      );
 
-    const wtDocs = await Promise.all(
-      wtIds.map((id) =>
-        getDoc(
-          doc(db, "projects", projectId, "subtitles", subtitleId, "workTypes", id),
-        ).catch(() => null),
-      ),
-    );
-    const wts: WorkTypeOption[] = wtIds
-      .map((id, i) => {
-        const raw = wtDocs[i]?.exists() ? (wtDocs[i]!.data() as Record<string, unknown>) : {};
-        return {
-          id,
-          name: toNonEmptyString(raw.name) || toNonEmptyString(raw.title) || id,
-          order: typeof raw.order === "number" ? raw.order : 0,
-        };
-      })
-      .sort((a, b) => a.order - b.order || a.name.localeCompare(b.name, "ja"));
-    setWorkTypeOptions(wts);
+      const wtDocs = await Promise.all(
+        wtIds.map((id) =>
+          getDoc(
+            doc(db, "projects", projectId, "subtitles", subtitleId, "workTypes", id),
+          ).catch(() => null),
+        ),
+      );
+      const wts: WorkTypeOption[] = wtIds
+        .map((id, i) => {
+          const d = wtDocs[i];
+          const raw = d?.exists() ? (d.data() as Record<string, unknown>) : {};
+          return {
+            id,
+            name: toNonEmptyString(raw.name) || toNonEmptyString(raw.title) || id,
+            order: typeof raw.order === "number" ? raw.order : 0,
+          };
+        })
+        .sort((a, b) => a.order - b.order || a.name.localeCompare(b.name, "ja"));
+      setWorkTypeOptions(wts);
 
-    const firstWtId = wts[0]?.id ?? "";
-    setSelectedWorkTypeId(firstWtId);
-    setPhotoOptions(filterPhotos(allPhotos, subtitleId, firstWtId));
+      const firstWtId = wts[0]?.id ?? "";
+      setSelectedWorkTypeId(firstWtId);
+      setPhotoOptions(filterPhotos(allPhotos, subtitleId, firstWtId));
+    } catch {
+      setErrorText("工種の取得に失敗しました。通信状況をご確認ください。");
+    }
   }
 
   function handleWorkTypeChange(workTypeId: string) {
@@ -726,8 +733,7 @@ export default function ChatRoomClient(props: {
     }
   }
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  async function markRoomAsRead(current: ChatProfile) {
+  const markRoomAsRead = useCallback(async (current: ChatProfile) => {
     try {
       const ref = doc(
         db,
@@ -753,7 +759,7 @@ export default function ChatRoomClient(props: {
     } catch (e) {
       console.log("mark read error:", e);
     }
-  }
+  }, [roomId]);
 
   useEffect(() => {
     if (!profile) return;

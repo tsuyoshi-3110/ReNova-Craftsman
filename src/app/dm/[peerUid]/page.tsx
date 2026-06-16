@@ -308,7 +308,8 @@ function pickPhotoStoragePath(data: Record<string, unknown>): string {
 function formatShotAt(v: unknown): string {
   let ms = 0;
   if (typeof v === "object" && v !== null && "seconds" in v) {
-    ms = (v as { seconds: number }).seconds * 1000;
+    const seconds = (v as { seconds: unknown }).seconds;
+    ms = typeof seconds === "number" ? seconds * 1000 : 0;
   } else if (typeof v === "number") {
     ms = v;
   }
@@ -532,7 +533,8 @@ export default function DmPage() {
       );
       const subs: SubtitleOption[] = subIds
         .map((id, i) => {
-          const raw = subDocs[i]?.exists() ? (subDocs[i]!.data() as Record<string, unknown>) : {};
+          const d = subDocs[i];
+          const raw = d?.exists() ? (d.data() as Record<string, unknown>) : {};
           return {
             id,
             name: toNonEmptyString(raw.name) || toNonEmptyString(raw.title) || id,
@@ -555,7 +557,8 @@ export default function DmPage() {
       );
       const wts: WorkTypeOption[] = wtIds
         .map((id, i) => {
-          const raw = wtDocs[i]?.exists() ? (wtDocs[i]!.data() as Record<string, unknown>) : {};
+          const d = wtDocs[i];
+          const raw = d?.exists() ? (d.data() as Record<string, unknown>) : {};
           return {
             id,
             name: toNonEmptyString(raw.name) || toNonEmptyString(raw.title) || id,
@@ -582,42 +585,66 @@ export default function DmPage() {
     setSelectedSubtitleId(subtitleId);
     setSelectedWorkTypeId("");
 
-    const wtIds = Array.from(
-      new Set(
-        allPhotos
-          .filter((p) => p.subtitleId === subtitleId && p.workTypeId)
-          .map((p) => p.workTypeId),
-      ),
-    );
+    try {
+      const wtIds = Array.from(
+        new Set(
+          allPhotos
+            .filter((p) => p.subtitleId === subtitleId && p.workTypeId)
+            .map((p) => p.workTypeId),
+        ),
+      );
 
-    const wtDocs = await Promise.all(
-      wtIds.map((id) =>
-        getDoc(
-          doc(db, "projects", projectId, "subtitles", subtitleId, "workTypes", id),
-        ).catch(() => null),
-      ),
-    );
-    const wts: WorkTypeOption[] = wtIds
-      .map((id, i) => {
-        const raw = wtDocs[i]?.exists() ? (wtDocs[i]!.data() as Record<string, unknown>) : {};
-        return {
-          id,
-          name: toNonEmptyString(raw.name) || toNonEmptyString(raw.title) || id,
-          order: typeof raw.order === "number" ? raw.order : 0,
-        };
-      })
-      .sort((a, b) => a.order - b.order || a.name.localeCompare(b.name, "ja"));
-    setWorkTypeOptions(wts);
+      const wtDocs = await Promise.all(
+        wtIds.map((id) =>
+          getDoc(
+            doc(db, "projects", projectId, "subtitles", subtitleId, "workTypes", id),
+          ).catch(() => null),
+        ),
+      );
+      const wts: WorkTypeOption[] = wtIds
+        .map((id, i) => {
+          const d = wtDocs[i];
+          const raw = d?.exists() ? (d.data() as Record<string, unknown>) : {};
+          return {
+            id,
+            name: toNonEmptyString(raw.name) || toNonEmptyString(raw.title) || id,
+            order: typeof raw.order === "number" ? raw.order : 0,
+          };
+        })
+        .sort((a, b) => a.order - b.order || a.name.localeCompare(b.name, "ja"));
+      setWorkTypeOptions(wts);
 
-    const firstWtId = wts[0]?.id ?? "";
-    setSelectedWorkTypeId(firstWtId);
-    setPhotoOptions(filterPhotos(allPhotos, subtitleId, firstWtId));
+      const firstWtId = wts[0]?.id ?? "";
+      setSelectedWorkTypeId(firstWtId);
+      setPhotoOptions(filterPhotos(allPhotos, subtitleId, firstWtId));
+    } catch {
+      setErrorText("工種の取得に失敗しました。通信状況をご確認ください。");
+    }
   }
 
   function handleWorkTypeChange(workTypeId: string) {
     setSelectedWorkTypeId(workTypeId);
     setPhotoOptions(filterPhotos(allPhotos, selectedSubtitleId, workTypeId));
   }
+
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const stickToBottomRef = useRef(true);
+
+  const roomId = useMemo(() => {
+    if (!meUid || !peerUid) return "";
+    return dmRoomId(meUid, peerUid); // canonical（sort）
+  }, [meUid, peerUid]);
+
+  const legacyRoomId = useMemo(() => {
+    if (!meUid || !peerUid) return "";
+    return `${meUid}__${peerUid}`; // legacy（no sort）
+  }, [meUid, peerUid]);
+
+  const legacyRoomIdReverse = useMemo(() => {
+    if (!meUid || !peerUid) return "";
+    return `${peerUid}__${meUid}`; // legacy reverse
+  }, [meUid, peerUid]);
 
   async function sendProjectPhotoAttachment(photo: ProjectPhotoOption) {
     if (!projectId || !roomId) return;
@@ -661,25 +688,6 @@ export default function DmPage() {
       setSending(false);
     }
   }
-
-  const listRef = useRef<HTMLDivElement | null>(null);
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const stickToBottomRef = useRef(true);
-
-  const roomId = useMemo(() => {
-    if (!meUid || !peerUid) return "";
-    return dmRoomId(meUid, peerUid); // canonical（sort）
-  }, [meUid, peerUid]);
-
-  const legacyRoomId = useMemo(() => {
-    if (!meUid || !peerUid) return "";
-    return `${meUid}__${peerUid}`; // legacy（no sort）
-  }, [meUid, peerUid]);
-
-  const legacyRoomIdReverse = useMemo(() => {
-    if (!meUid || !peerUid) return "";
-    return `${peerUid}__${meUid}`; // legacy reverse
-  }, [meUid, peerUid]);
 
   const resizeTextarea = useCallback(() => {
     const el = textareaRef.current;
@@ -971,7 +979,20 @@ export default function DmPage() {
       } | null = null;
 
       if (file) {
-        media = await uploadAttachment({ file, projectId, roomId });
+        try {
+          media = await uploadAttachment({ file, projectId, roomId });
+        } catch (uploadErr: unknown) {
+          const uploadMsg = uploadErr instanceof Error ? uploadErr.message : String(uploadErr);
+          if (uploadMsg === "UNSUPPORTED_FILE") {
+            setErrorText("画像/動画/PDF以外は添付できません。");
+          } else if (uploadMsg.includes("storage/unauthorized") || uploadMsg.includes("permission")) {
+            setErrorText("ファイルのアップロード権限がありません。");
+          } else {
+            setErrorText("ファイルのアップロードに失敗しました。通信状況をご確認ください。");
+          }
+          setSending(false);
+          return;
+        }
       }
 
       const payload: Msg = {
@@ -995,13 +1016,7 @@ export default function DmPage() {
         resizeTextarea();
       });
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
       console.log("dm send error:", e);
-
-      if (msg === "UNSUPPORTED_FILE") {
-        setErrorText("画像/動画/PDF以外は添付できません。");
-        return;
-      }
 
       setErrorText("送信に失敗しました。通信状況をご確認ください。");
     } finally {
