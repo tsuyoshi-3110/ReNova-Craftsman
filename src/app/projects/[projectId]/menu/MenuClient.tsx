@@ -81,6 +81,7 @@ export default function MenuClient({
   const [projectName, setProjectName] = useState<string | null>(null);
   const [hasPeriodChart, setHasPeriodChart] = useState(false);
   const [hasOverallSchedule, setHasOverallSchedule] = useState(false);
+  const [hasLocationPhotos, setHasLocationPhotos] = useState(false);
   const [chatLastReadAtMillis, setChatLastReadAtMillis] = useState(0);
   const [chatUnreadCount, setChatUnreadCount] = useState(0);
   const checkOverallScheduleExists = useCallback(
@@ -104,7 +105,7 @@ export default function MenuClient({
         const data = overallSnap.data() as { shared?: unknown };
         setHasOverallSchedule(data.shared === true);
       } catch (e) {
-        console.error("overall schedule check error:", e);
+        console.warn("overall schedule check error:", e);
         setHasOverallSchedule(false);
       }
     },
@@ -131,8 +132,22 @@ export default function MenuClient({
       const data = periodSnap.data() as { shared?: unknown };
       setHasPeriodChart(data.shared === true);
     } catch (e) {
-      console.error("periodChart check error:", e);
+      console.warn("periodChart check error:", e);
       setHasPeriodChart(false);
+    }
+  }, []);
+
+  const checkLocationPhotosShared = useCallback(async (nextProjectId: string) => {
+    const safeProjectId = toNonEmptyString(nextProjectId);
+    if (!safeProjectId) { setHasLocationPhotos(false); return; }
+    try {
+      const snap = await getDoc(
+        doc(db, "projects", safeProjectId, "locationPhotoDocumentsConfig", "share"),
+      );
+      setHasLocationPhotos(snap.exists() && snap.data()?.shared === true);
+    } catch (e) {
+      console.warn("locationPhotos share check error:", e);
+      setHasLocationPhotos(false);
     }
   }, []);
 
@@ -144,6 +159,7 @@ export default function MenuClient({
           setProfile(null);
           setHasPeriodChart(false);
           setHasOverallSchedule(false);
+          setHasLocationPhotos(false);
           setChatLastReadAtMillis(0);
           setChatUnreadCount(0);
           setLoading(false);
@@ -160,6 +176,7 @@ export default function MenuClient({
           setProfile(null);
           setHasPeriodChart(false);
           setHasOverallSchedule(false);
+          setHasLocationPhotos(false);
           setChatLastReadAtMillis(0);
           setChatUnreadCount(0);
           setLoading(false);
@@ -178,6 +195,7 @@ export default function MenuClient({
           setProjectName(null);
           setHasPeriodChart(false);
           setHasOverallSchedule(false);
+          setHasLocationPhotos(false);
           setChatLastReadAtMillis(0);
           setChatUnreadCount(0);
           setLoading(false);
@@ -215,6 +233,7 @@ export default function MenuClient({
         });
         await checkPeriodChartExists(pickedProjectId);
         await checkOverallScheduleExists(pickedProjectId);
+        await checkLocationPhotosShared(pickedProjectId);
 
         setLoading(false);
       } catch (e) {
@@ -223,6 +242,7 @@ export default function MenuClient({
         setProfile(null);
         setHasPeriodChart(false);
         setHasOverallSchedule(false);
+        setHasLocationPhotos(false);
         setChatLastReadAtMillis(0);
         setChatUnreadCount(0);
         setLoading(false);
@@ -237,6 +257,7 @@ export default function MenuClient({
     session,
     checkPeriodChartExists,
     checkOverallScheduleExists,
+    checkLocationPhotosShared,
   ]);
 
   useEffect(() => {
@@ -266,7 +287,7 @@ export default function MenuClient({
         setChatLastReadAtMillis(toMillis(data.lastReadAt));
       },
       (err) => {
-        console.error("menu readState onSnapshot error:", err);
+        console.warn("menu readState onSnapshot error:", err);
         setChatLastReadAtMillis(0);
       },
     );
@@ -313,7 +334,7 @@ export default function MenuClient({
         setChatUnreadCount(unread);
       },
       (err) => {
-        console.error("menu messages onSnapshot error:", err);
+        console.warn("menu messages onSnapshot error:", err);
         setChatUnreadCount(0);
       },
     );
@@ -436,6 +457,26 @@ export default function MenuClient({
                 ProcNovaの職人用PDFを確認
               </div>
             </button>
+
+            {hasLocationPhotos && (
+              <button
+                type="button"
+                onClick={() =>
+                  router.push(
+                    `/projects/${encodeURIComponent(projectId)}/location-photos`,
+                  )
+                }
+                className="w-full rounded-2xl border bg-white p-4 text-left hover:bg-gray-50
+                           dark:border-gray-800 dark:bg-gray-950 dark:hover:bg-gray-900"
+              >
+                <div className="text-base font-extrabold text-gray-900 dark:text-gray-100">
+                  箇所写真管理
+                </div>
+                <div className="mt-1 text-sm text-gray-600 dark:text-gray-300">
+                  監督サイトで共有された図面上のピン情報を確認
+                </div>
+              </button>
+            )}
 
             <button
               type="button"

@@ -393,23 +393,23 @@ export default function OverallScheduleClient({
   if (!user) return null;
 
   return (
-    <main className="min-h-dvh bg-gray-50 dark:bg-gray-950">
-      <div className="mx-auto w-full max-w-7xl px-2 py-2">
-        <div className="rounded-2xl border bg-white p-2 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+    <main className="overall-print-root min-h-dvh bg-gray-50 print:bg-white dark:bg-gray-950">
+      <div className="mx-auto w-full max-w-7xl px-2 py-2 print:max-w-none print:px-0 print:py-0">
+        <div className="rounded-2xl border bg-white p-2 shadow-sm print:border-0 print:p-0 print:shadow-none dark:border-gray-800 dark:bg-gray-900">
           {!overall ? (
             <div className="rounded-2xl border border-dashed border-gray-300 p-6 text-sm text-gray-600 dark:border-gray-700 dark:text-gray-300">
               この現場には全体工程表データがありません。
             </div>
           ) : (
-            <div className="rounded-xl border dark:border-gray-800">
+            <div className="rounded-xl border print:rounded-none print:border-0 dark:border-gray-800">
               <div
                 ref={chartViewportRef}
-                className="relative overflow-hidden p-1"
+                className="overall-print-chart-viewport relative overflow-hidden p-1"
                 style={{ height: scaledHeight ?? undefined }}
               >
                 <div
                   ref={chartContentRef}
-                  className="absolute left-1 top-1"
+                  className="overall-print-chart-content absolute left-1 top-1"
                   style={{
                     width: chartMinWidth,
                     transform: `scale(${chartScale})`,

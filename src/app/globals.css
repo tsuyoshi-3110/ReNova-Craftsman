@@ -28,3 +28,38 @@ body {
 html {
   -webkit-text-size-adjust: 100%;
 }
+
+@media print {
+  @page {
+    size: A4 landscape;
+    margin: 8mm;
+  }
+
+  html,
+  body {
+    background: #fff !important;
+  }
+
+  .overall-print-root {
+    background: #fff !important;
+    color: #111827 !important;
+  }
+
+  .overall-print-root .sticky {
+    position: static !important;
+  }
+
+  .overall-print-chart-viewport {
+    height: auto !important;
+    overflow: visible !important;
+    padding: 0 !important;
+  }
+
+  .overall-print-chart-content {
+    left: auto !important;
+    position: relative !important;
+    top: auto !important;
+    transform: none !important;
+    transform-origin: top left !important;
+  }
+}
