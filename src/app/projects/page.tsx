@@ -16,6 +16,8 @@ import {
 } from "firebase/firestore";
 
 import { auth, db } from "@/lib/firebaseClient";
+import { expandWorkTypesToSubtitleNames } from "@/lib/workItemNames";
+import CraftsmanNavBar from "@/components/CraftsmanNavBar";
 
 type Role = "owner" | "member";
 
@@ -61,7 +63,17 @@ type CraftsmanProfile = {
   company?: string;
   phone?: string;
   address?: string;
+  workType?: string;
 };
+
+// workType 文字列（"防水 / シーリング" など）を配列に分解
+function splitWorkTypes(v: unknown): string[] {
+  if (typeof v !== "string") return [];
+  return v
+    .split(/[/、,・]/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
 
 export default function ProjectsPage() {
   const router = useRouter();
@@ -206,8 +218,9 @@ export default function ProjectsPage() {
       // 5) projects/{projectId}/members/{uid}
       // ✅ ここは「role=member（権限用）」＋「memberRole=craftsman（現場役割）」
       // ✅ workType / invitedByUid / photoURL / revoked は入れない
+      const memberRef = doc(db, "projects", projectId, "members", myUid);
       await setDoc(
-        doc(db, "projects", projectId, "members", myUid),
+        memberRef,
         {
           uid: myUid,
 
@@ -230,6 +243,27 @@ export default function ProjectsPage() {
         },
         { merge: true },
       );
+
+      // 6) workItemNames は craftsmen の工種から自動設定（proclink の取り扱い工事）
+      // メンバー登録後でないと subtitles を読めないため、参加処理の最後に行う。
+      // 未設定（空）の場合は書かない（再参加時に手動設定を消さないため）
+      const workTypes = splitWorkTypes(cp?.workType);
+      if (workTypes.length > 0) {
+        try {
+          const names = await expandWorkTypesToSubtitleNames(
+            db,
+            projectId,
+            workTypes,
+          );
+          await setDoc(
+            memberRef,
+            { workItemNames: names, workItemName: names[0] ?? "" },
+            { merge: true },
+          );
+        } catch (e) {
+          console.warn("workItemNames set on join error:", e);
+        }
+      }
 
       setJoinInfo(`参加しました：${projectName || projectId}`);
       setJoinCodeRaw("");
@@ -309,7 +343,7 @@ export default function ProjectsPage() {
   }
 
   return (
-    <main className="min-h-dvh bg-gray-50 dark:bg-gray-950">
+    <main className="min-h-dvh bg-gray-50 pb-24 dark:bg-gray-950">
       <div className="mx-auto w-full max-w-md px-4 py-10">
         <div className="text-lg font-extrabold text-gray-900 dark:text-gray-100">
           工事一覧
@@ -374,7 +408,7 @@ export default function ProjectsPage() {
           setJoinOpen(true);
         }}
         className="fixed z-50 flex h-14 w-14 items-center justify-center rounded-full bg-gray-900 text-white shadow-lg hover:opacity-90 dark:bg-white dark:text-gray-900"
-        style={{ bottom: "calc(1.5rem + env(safe-area-inset-bottom))", right: "1.5rem" }}
+        style={{ bottom: "calc(5rem + env(safe-area-inset-bottom))", right: "1.5rem" }}
         aria-label="工事に参加"
       >
         <span className="text-3xl leading-none">+</span>
@@ -455,6 +489,8 @@ export default function ProjectsPage() {
           </div>
         </div>
       )}
+
+      <CraftsmanNavBar />
     </main>
   );
 }

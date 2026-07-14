@@ -807,7 +807,6 @@ export default function LocationPhotosClient({
   const [mode, setMode] = useState<"read" | "add" | "move">("read");
   const [pendingPos, setPendingPos] = useState<{ xRatio: number; yRatio: number } | null>(null);
   const [movingPin, setMovingPin] = useState<LocationPhotoPin | null>(null);
-  const [subtitleColorMap, setSubtitleColorMap] = useState<Record<string, string>>({});
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => {
@@ -965,25 +964,6 @@ export default function LocationPhotosClient({
 
     return () => unsub();
   }, [projectId, selectedDoc]);
-
-  // overall schedule から工種カラーマップをロード
-  useEffect(() => {
-    if (!projectId || !ready) return;
-    void (async () => {
-      try {
-        const snap = await getDoc(doc(db, "projects", projectId, "scheduleData", "overall"));
-        if (!snap.exists()) return;
-        const data = snap.data() as { rows?: Array<{ subtitleId?: string; color?: string }> };
-        const map: Record<string, string> = {};
-        for (const row of data.rows ?? []) {
-          if (row.subtitleId && row.color) map[row.subtitleId] = row.color;
-        }
-        setSubtitleColorMap(map);
-      } catch {
-        // 権限なし等の場合は無視
-      }
-    })();
-  }, [projectId, ready]);
 
   const handleSavePin = useCallback(
     async (data: PinData) => {
@@ -1174,7 +1154,7 @@ export default function LocationPhotosClient({
             {(
               [
                 { key: "read", label: "読み取り", Icon: Eye },
-                { key: "add",  label: "追加",     Icon: Plus },
+                { key: "add",  label: "ピン",     Icon: Plus },
                 { key: "move", label: "移動",     Icon: Move },
               ] as const
             ).map(({ key, label, Icon }) => (
@@ -1199,7 +1179,9 @@ export default function LocationPhotosClient({
 
       <div
         className="relative w-full"
-        style={{ cursor: (mode === "add" || mode === "move") && contentReady ? "crosshair" : "default" }}
+        style={{
+          cursor: mode !== "read" && contentReady ? "crosshair" : "default",
+        }}
         onClick={(e) => {
           if (mode === "read" || !contentReady || selectedPin) return;
           const rect = e.currentTarget.getBoundingClientRect();
@@ -1236,7 +1218,6 @@ export default function LocationPhotosClient({
               pin={pin}
               index={idx}
               isMoving={movingPin?.id === pin.id}
-              color={pin.subtitleId ? subtitleColorMap[pin.subtitleId] : undefined}
               onClick={(p) => {
                 if (mode === "move" && p.createdByUid === currentUid) {
                   setMovingPin((prev) => (prev?.id === p.id ? null : p));
@@ -1246,6 +1227,7 @@ export default function LocationPhotosClient({
               }}
             />
           ))}
+
       </div>
 
       {/* ピン一覧（下部スクロールバー） */}
@@ -1289,6 +1271,7 @@ export default function LocationPhotosClient({
           onClose={() => { setPendingPos(null); setMode("read"); }}
         />
       )}
+
     </main>
   );
 }
