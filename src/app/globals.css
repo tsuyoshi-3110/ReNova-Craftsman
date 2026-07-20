@@ -3,6 +3,7 @@
 :root {
   --background: #ffffff;
   --foreground: #171717;
+  --craftsman-nav-height: calc(3.5rem + env(safe-area-inset-bottom));
 }
 
 @theme inline {
@@ -62,4 +63,14 @@ html {
     transform: none !important;
     transform-origin: top left !important;
   }
+}
+
+/* 全画面表示（工程表）：フッターを隠して表示領域を広げる */
+body[data-chart-fullscreen="1"] .craftsman-nav {
+  display: none;
+}
+
+/* フッターぶんの余白も外す（残すと画面下に空白が出る） */
+body[data-chart-fullscreen="1"] .app-shell {
+  padding-bottom: 0 !important;
 }

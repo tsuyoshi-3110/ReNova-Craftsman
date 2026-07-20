@@ -3,6 +3,17 @@
 
 import React, { useEffect, useState, useMemo, useCallback } from "react";
 import { useRouter } from "next/navigation";
+import {
+  CalendarDays,
+  CalendarRange,
+  ChevronRight,
+  FileText,
+  HardHat,
+  MapPin,
+  MessageCircle,
+  Users,
+  type LucideIcon,
+} from "lucide-react";
 import { onAuthStateChanged, signOut, type User } from "firebase/auth";
 import {
   collection,
@@ -58,6 +69,31 @@ function toMillis(v: unknown): number {
   return 0;
 }
 
+type MenuAccent = "sky" | "indigo" | "amber" | "emerald" | "violet" | "slate";
+
+type MenuItem = {
+  key: string;
+  title: string;
+  description: string;
+  icon: LucideIcon;
+  accent: MenuAccent;
+  badge?: number;
+  onClick: () => void;
+};
+
+/** アイコンの下地。彩度を抑えて、現場で見ても目が疲れない濃さにする */
+const ACCENT_STYLES: Record<MenuAccent, string> = {
+  sky: "bg-sky-50 text-sky-600 dark:bg-sky-950/40 dark:text-sky-300",
+  indigo:
+    "bg-indigo-50 text-indigo-600 dark:bg-indigo-950/40 dark:text-indigo-300",
+  amber: "bg-amber-50 text-amber-600 dark:bg-amber-950/40 dark:text-amber-300",
+  emerald:
+    "bg-emerald-50 text-emerald-600 dark:bg-emerald-950/40 dark:text-emerald-300",
+  violet:
+    "bg-violet-50 text-violet-600 dark:bg-violet-950/40 dark:text-violet-300",
+  slate: "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300",
+};
+
 export default function MenuClient({
   initialProjectId,
 }: {
@@ -76,7 +112,7 @@ export default function MenuClient({
 
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState<User | null>(null);
-  const [profile, setProfile] = useState<CraftsmanProfile | null>(null);
+  const [, setProfile] = useState<CraftsmanProfile | null>(null);
   const [projectId, setProjectId] = useState<string>("");
   const [projectName, setProjectName] = useState<string | null>(null);
   const [hasPeriodChart, setHasPeriodChart] = useState(false);
@@ -224,18 +260,44 @@ export default function MenuClient({
           if (hit?.projectName) pickedProjectName = hit.projectName;
         }
 
+        // それでも分からなければ、工事一覧と同じ場所（myProjects）から読む。
+        // 一覧はここから名前を出しているが、メニューへ遷移するときに
+        // 名前を渡していないため、セッションにも profile にも無いことがある。
+        if (!pickedProjectName) {
+          try {
+            const mySnap = await getDoc(
+              doc(db, "users", u.uid, "myProjects", pickedProjectId),
+            );
+            if (mySnap.exists()) {
+              const my = mySnap.data() as Record<string, unknown>;
+              pickedProjectName =
+                toNonEmptyString(my.projectName) ||
+                toNonEmptyString(my.name) ||
+                null;
+            }
+          } catch (e) {
+            console.log("myProjects name load failed:", e);
+          }
+        }
+
         setProjectId(pickedProjectId);
         setProjectName(pickedProjectName);
+        setHasPeriodChart(false);
+        setHasOverallSchedule(false);
+        setHasLocationPhotos(false);
 
         saveCraftsmanSession({
           projectId: pickedProjectId,
           projectName: pickedProjectName ?? null,
         });
-        await checkPeriodChartExists(pickedProjectId);
-        await checkOverallScheduleExists(pickedProjectId);
-        await checkLocationPhotosShared(pickedProjectId);
 
         setLoading(false);
+
+        void Promise.all([
+          checkPeriodChartExists(pickedProjectId),
+          checkOverallScheduleExists(pickedProjectId),
+          checkLocationPhotosShared(pickedProjectId),
+        ]);
       } catch (e) {
         console.error("menu load error:", e);
         setUser(null);
@@ -342,11 +404,6 @@ export default function MenuClient({
     return () => unsub();
   }, [projectId, user?.uid, chatLastReadAtMillis]);
 
-  async function handleLogout() {
-    await signOut(auth);
-    router.replace("/login");
-  }
-
   if (loading) {
     return (
       <main className="min-h-dvh bg-gray-50 dark:bg-gray-950">
@@ -363,161 +420,151 @@ export default function MenuClient({
 
   if (!user) return null;
 
-  const name =
-    toNonEmptyString(profile?.name) ||
-    toNonEmptyString(user.displayName) ||
-    "職人";
-  const company = toNonEmptyString(profile?.company);
+  const menuItems: MenuItem[] = [
+    ...(hasOverallSchedule
+      ? [
+          {
+            key: "overall",
+            title: "全体工程表",
+            description: "工事全体の流れを確認",
+            icon: CalendarRange,
+            accent: "sky" as const,
+            onClick: () =>
+              router.push(
+                `/projects/${encodeURIComponent(projectId)}/overall-schedule`,
+              ),
+          },
+        ]
+      : []),
+    ...(hasPeriodChart
+      ? [
+          {
+            key: "period",
+            title: "期間工程表",
+            description: "今月・今週の予定を確認",
+            icon: CalendarDays,
+            accent: "indigo" as const,
+            onClick: () =>
+              router.push(
+                `/projects/${encodeURIComponent(projectId)}/period-chart`,
+              ),
+          },
+        ]
+      : []),
+    {
+      key: "board",
+      title: "掲示板",
+      description: "作業員用のPDFを確認",
+      icon: FileText,
+      accent: "amber" as const,
+      onClick: () =>
+        router.push(`/projects/${encodeURIComponent(projectId)}/board`),
+    },
+    ...(hasLocationPhotos
+      ? [
+          {
+            key: "location-photos",
+            title: "箇所写真管理",
+            description: "図面上のピン情報を確認",
+            icon: MapPin,
+            accent: "emerald" as const,
+            onClick: () =>
+              router.push(
+                `/projects/${encodeURIComponent(projectId)}/location-photos`,
+              ),
+          },
+        ]
+      : []),
+    {
+      key: "chat",
+      title: "現場グループチャット",
+      description: "画像・動画も共有して報告",
+      icon: MessageCircle,
+      accent: "violet" as const,
+      badge: chatUnreadCount,
+      onClick: () =>
+        router.push(`/projects/${encodeURIComponent(projectId)}/chat`),
+    },
+    {
+      key: "managers",
+      title: "管理者一覧",
+      description: "管理者へ個別にDMできます",
+      icon: Users,
+      accent: "slate" as const,
+      onClick: () =>
+        router.push(`/projects/${encodeURIComponent(projectId)}/managers`),
+    },
+    {
+      key: "craftsmen",
+      title: "作業員一覧",
+      description: "同じ現場の作業員へ個別にDMできます",
+      icon: HardHat,
+      accent: "amber" as const,
+      onClick: () =>
+        router.push(`/projects/${encodeURIComponent(projectId)}/craftsmen`),
+    },
+  ];
 
   return (
-    <main className="min-h-dvh bg-gray-50 dark:bg-gray-950">
-      <div className="mx-auto w-full max-w-md px-4 py-10">
-        <div className="rounded-2xl border bg-white p-6 shadow-sm dark:border-gray-800 dark:bg-gray-900">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <div className="text-lg font-extrabold text-gray-900 dark:text-gray-100">
-                メニュー
-              </div>
-              <div className="mt-1 text-xs font-bold text-gray-500 dark:text-gray-400">
-                {name}
-                {company ? ` / ${company}` : ""}
-                {projectName ? ` / ${projectName}` : ""}
-              </div>
-            </div>
+    <main className="min-h-dvh bg-gradient-to-b from-gray-50 to-gray-100 dark:from-gray-950 dark:to-gray-900">
+      <div className="mx-auto w-full max-w-md px-4 pb-10 pt-6">
+        {/* 今どの工事を見ているか。ここから切り替えもできる */}
+        <button
+          type="button"
+          onClick={() => router.push("/projects")}
+          className="flex w-full items-center justify-between gap-2 rounded-2xl bg-white px-4 py-3 text-left shadow-sm ring-1 ring-gray-200/80 transition hover:shadow-md active:scale-[0.99] dark:bg-gray-900 dark:ring-gray-800"
+        >
+          <span className="min-w-0">
+            <span className="block text-[10px] font-bold text-gray-500 dark:text-gray-400">
+              現在の工事
+            </span>
+            <span className="block truncate text-sm font-extrabold text-gray-900 dark:text-gray-100">
+              {projectName || "（未選択）"}
+            </span>
+          </span>
+          <span className="shrink-0 text-[11px] font-extrabold text-sky-700 dark:text-sky-300">
+            切り替え
+          </span>
+        </button>
 
-            <button
-              type="button"
-              onClick={() => void handleLogout()}
-              className="rounded-xl border bg-white px-4 py-3 text-sm font-extrabold text-gray-900 hover:bg-gray-50 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-100 dark:hover:bg-gray-900"
-            >
-              ログアウト
-            </button>
-          </div>
+        <div className="mt-4 grid gap-2.5">
+          {menuItems.map((item) => {
+            const Icon = item.icon;
+            const accent = ACCENT_STYLES[item.accent];
 
-          <button
-            type="button"
-            onClick={() => router.push("/projects")}
-            className="mt-4 w-full rounded-xl border bg-white px-3 py-3 text-sm font-extrabold text-gray-900 hover:bg-gray-50 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-100 dark:hover:bg-gray-900"
-          >
-            工事を切り替える
-          </button>
-
-          <div className="mt-6 grid gap-3">
-            {hasOverallSchedule ? (
+            return (
               <button
+                key={item.key}
                 type="button"
-                onClick={() =>
-                  router.push(
-                    `/projects/${encodeURIComponent(projectId)}/overall-schedule`,
-                  )
-                }
-                className="w-full rounded-2xl border bg-white p-4 text-left hover:bg-gray-50
-                         dark:border-gray-800 dark:bg-gray-950 dark:hover:bg-gray-900"
+                onClick={item.onClick}
+                className="group flex w-full items-center gap-3 rounded-2xl bg-white p-3.5 text-left shadow-sm ring-1 ring-gray-200/80 transition hover:shadow-md active:scale-[0.99] dark:bg-gray-900 dark:ring-gray-800"
               >
-                <div className="text-base font-extrabold text-gray-900 dark:text-gray-100">
-                  全体工程表
-                </div>
-                <div className="mt-1 text-sm text-gray-600 dark:text-gray-300">
-                  ProcNova で保持されている全体工程表を表示
-                </div>
-              </button>
-            ) : null}
-            {hasPeriodChart ? (
-              <button
-                type="button"
-                onClick={() =>
-                  router.push(
-                    `/projects/${encodeURIComponent(projectId)}/period-chart`,
-                  )
-                }
-                className="w-full rounded-2xl border bg-white p-4 text-left hover:bg-gray-50
-                         dark:border-gray-800 dark:bg-gray-950 dark:hover:bg-gray-900"
-              >
-                <div className="text-base font-extrabold text-gray-900 dark:text-gray-100">
-                  区間工程表
-                </div>
-                <div className="mt-1 text-sm text-gray-600 dark:text-gray-300">
-                  ProcNova で保持されている区間工程表を表示
-                </div>
-              </button>
-            ) : null}
-            <button
-              type="button"
-              onClick={() => {
-                console.log("projectId:", projectId);
-                router.push(`/projects/${encodeURIComponent(projectId)}/board`);
-              }}
-              className="w-full rounded-2xl border bg-white p-4 text-left hover:bg-gray-50
-                         dark:border-gray-800 dark:bg-gray-950 dark:hover:bg-gray-900"
-            >
-              <div className="text-base font-extrabold text-gray-900 dark:text-gray-100">
-                掲示板（職人用PDF）
-              </div>
-              <div className="mt-1 text-sm text-gray-600 dark:text-gray-300">
-                ProcNovaの職人用PDFを確認
-              </div>
-            </button>
+                <span
+                  className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ${accent}`}
+                >
+                  <Icon className="h-5 w-5" />
+                </span>
 
-            {hasLocationPhotos && (
-              <button
-                type="button"
-                onClick={() =>
-                  router.push(
-                    `/projects/${encodeURIComponent(projectId)}/location-photos`,
-                  )
-                }
-                className="w-full rounded-2xl border bg-white p-4 text-left hover:bg-gray-50
-                           dark:border-gray-800 dark:bg-gray-950 dark:hover:bg-gray-900"
-              >
-                <div className="text-base font-extrabold text-gray-900 dark:text-gray-100">
-                  箇所写真管理
-                </div>
-                <div className="mt-1 text-sm text-gray-600 dark:text-gray-300">
-                  監督サイトで共有された図面上のピン情報を確認
-                </div>
+                <span className="min-w-0 flex-1">
+                  <span className="flex items-center gap-2">
+                    <span className="truncate text-[15px] font-extrabold text-gray-900 dark:text-gray-100">
+                      {item.title}
+                    </span>
+                    {item.badge && item.badge > 0 ? (
+                      <span className="shrink-0 rounded-full bg-red-500 px-1.5 py-0.5 text-[10px] font-extrabold leading-none text-white">
+                        {item.badge}
+                      </span>
+                    ) : null}
+                  </span>
+                  <span className="mt-0.5 block truncate text-xs text-gray-500 dark:text-gray-400">
+                    {item.description}
+                  </span>
+                </span>
+
+                <ChevronRight className="h-5 w-5 shrink-0 text-gray-300 transition group-hover:translate-x-0.5 group-hover:text-gray-400 dark:text-gray-600" />
               </button>
-            )}
-
-            <button
-              type="button"
-              onClick={() =>
-                router.push(`/projects/${encodeURIComponent(projectId)}/chat`)
-              }
-              className="w-full rounded-2xl border bg-white p-4 text-left hover:bg-gray-50 dark:border-gray-800 dark:bg-gray-950 dark:hover:bg-gray-900"
-            >
-              <div className="flex items-center justify-between gap-3">
-                <div className="text-base font-extrabold text-gray-900 dark:text-gray-100">
-                  現場関係者グループチャット
-                </div>
-                {chatUnreadCount > 0 && (
-                  <div className="shrink-0 rounded-full bg-red-500 px-2 py-0.5 text-xs font-extrabold text-white">
-                    {chatUnreadCount}
-                  </div>
-                )}
-              </div>
-              <div className="mt-1 text-sm text-gray-600 dark:text-gray-300">
-                監督・職人で画像/動画も共有して報告
-              </div>
-            </button>
-
-            <button
-              type="button"
-              onClick={() =>
-                router.push(
-                  `/projects/${encodeURIComponent(projectId)}/managers`,
-                )
-              }
-              className="w-full rounded-2xl border bg-white p-4 text-left hover:bg-gray-50
-             dark:border-gray-800 dark:bg-gray-950 dark:hover:bg-gray-900"
-            >
-              <div className="text-base font-extrabold text-gray-900 dark:text-gray-100">
-                管督員一覧
-              </div>
-              <div className="mt-1 text-sm text-gray-600 dark:text-gray-300">
-                管督員一覧を開いて個別にDMできます（画像/動画/PDFも送信予定）
-              </div>
-            </button>
-          </div>
+            );
+          })}
         </div>
       </div>
     </main>

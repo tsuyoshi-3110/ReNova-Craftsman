@@ -1,7 +1,13 @@
 // src/app/projects/[projectId]/period-chart/PeriodChartClient.tsx
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useRouter } from "next/navigation";
 import { onAuthStateChanged, signOut, type User } from "firebase/auth";
 import { doc, getDoc } from "firebase/firestore";
@@ -22,6 +28,39 @@ type CraftsmanProfile = {
 };
 
 type ViewMode = "twoWeeks" | "month";
+
+/** 画面へ収める列数（日曜を除いた約2週間） */
+const VISIBLE_COLUMN_COUNT = 12;
+/** チャート枠の内側の余白ぶん */
+const CHART_INSET_PX = 8;
+/** 横向き・広い画面と判断する幅。ここを境に列数を倍にする（＝列幅は半分） */
+const WIDE_VIEWPORT_MIN_WIDTH = 700;
+/** 工区・工種名の列幅 */
+const LABEL_COLUMN_MIN_WIDTH = 104;
+const LABEL_COLUMN_MAX_WIDTH = 168;
+/** 行の高さ。列幅とは切り離す（列を細くしても行が高くならないように） */
+const ROW_HEIGHT_PX = 16;
+/** 日付ヘッダの高さ */
+const DAY_HEADER_HEIGHT_PX = 34;
+/** チャートの表示高さの上限（この中で縦スクロールする） */
+const CHART_MAX_HEIGHT = "72dvh";
+/** 全画面表示のときの高さ */
+const CHART_FULLSCREEN_HEIGHT = "100dvh";
+/** ズームボタンで変えられる倍率 */
+const ZOOM_STEPS = [0.5, 0.75, 1, 1.5, 2, 3] as const;
+/** 縦方向がズームに追従する割合（1 で横と同じだけ伸びる） */
+const VERTICAL_ZOOM_RATIO = 0.5;
+
+/** 現在の倍率から1段階ずらす */
+function stepZoom(current: number, direction: 1 | -1): number {
+  const index = ZOOM_STEPS.indexOf(current as (typeof ZOOM_STEPS)[number]);
+  const from = index >= 0 ? index : ZOOM_STEPS.findIndex((v) => v >= current);
+  const next = Math.min(
+    ZOOM_STEPS.length - 1,
+    Math.max(0, (from < 0 ? 1 : from) + direction),
+  );
+  return ZOOM_STEPS[next];
+}
 
 type PeriodChartSavedRow = {
   label: string;
@@ -148,6 +187,15 @@ export default function PeriodChartClient({
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState<User | null>(null);
   const [chart, setChart] = useState<PeriodChartSavedPayload | null>(null);
+  const [viewportWidth, setViewportWidth] = useState(0);
+  const [zoom, setZoom] = useState(1);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [scaledHeight, setScaledHeight] = useState<number | null>(null);
+  const chartViewportRef = useRef<HTMLDivElement | null>(null);
+  const chartContentRef = useRef<HTMLDivElement | null>(null);
+  const didScrollToTodayRef = useRef(false);
+  // ズーム前に画面左端に見えていた日付。拡大後も同じ日付を左端に保つために使う
+  const zoomAnchorRef = useRef<number | null>(null);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (u) => {
@@ -271,13 +319,135 @@ export default function PeriodChartClient({
     }));
   }, [chart]);
 
-  const chartGridTemplate = useMemo(() => {
-    if (!displayDays.length) return "88px";
-    const labelWidth = chart?.mode === "month" ? 88 : 116;
-    return `${labelWidth}px repeat(${displayDays.length}, minmax(0, 1fr))`;
-  }, [chart?.mode, displayDays.length]);
+  // 横向きは幅に余裕があるので、収める列数を倍にする（1列の幅は半分になる）
+  const visibleColumnCount =
+    viewportWidth >= WIDE_VIEWPORT_MIN_WIDTH
+      ? VISIBLE_COLUMN_COUNT * 2
+      : VISIBLE_COLUMN_COUNT;
 
-  const rowHeightClass = "h-2 sm:h-2.5";
+  /** 工区・工種名の列幅。狭い画面では日付側に幅を回す */
+  const labelColumnWidth = useMemo(() => {
+    if (viewportWidth <= 0) return LABEL_COLUMN_MIN_WIDTH;
+
+    const base = Math.max(
+      LABEL_COLUMN_MIN_WIDTH,
+      Math.min(LABEL_COLUMN_MAX_WIDTH, viewportWidth * 0.34),
+    );
+
+    const isWideViewport = viewportWidth >= WIDE_VIEWPORT_MIN_WIDTH;
+    return Math.round(isWideViewport ? (base / 2) * 1.5 : base);
+  }, [viewportWidth]);
+
+  /**
+   * 1日ぶんの列幅。
+   * 「画面に収める列数」で画面幅がちょうど埋まる幅にし、残りは横スクロールで見る。
+   */
+  const dayColumnWidth = useMemo(() => {
+    if (viewportWidth <= 0) return 24;
+
+    const usable = viewportWidth - CHART_INSET_PX - labelColumnWidth;
+    if (usable <= 0) return 24;
+
+    return Math.max(1, (usable / visibleColumnCount) * zoom);
+  }, [labelColumnWidth, viewportWidth, visibleColumnCount, zoom]);
+
+  /** 行の高さ・文字もズームに追従させる（縦は横より控えめに） */
+  const verticalSizing = useMemo(() => {
+    const verticalZoom = 1 + (zoom - 1) * VERTICAL_ZOOM_RATIO;
+    const scaleY = (value: number, min: number, max: number) =>
+      Math.round(Math.min(max, Math.max(min, value * verticalZoom)));
+
+    return {
+      rowHeight: scaleY(ROW_HEIGHT_PX, 12, 56),
+      dayHeaderHeight: scaleY(DAY_HEADER_HEIGHT_PX, 24, 60),
+      groupHeaderHeight: scaleY(22, 16, 48),
+      labelFontPx: scaleY(11, 9, 20),
+      swatchSize: scaleY(10, 8, 18),
+    };
+  }, [zoom]);
+
+  const chartGridTemplate = useMemo(() => {
+    if (!displayDays.length) return `${labelColumnWidth}px`;
+    return `${labelColumnWidth}px repeat(${displayDays.length}, ${dayColumnWidth}px)`;
+  }, [dayColumnWidth, displayDays.length, labelColumnWidth]);
+
+  const chartMinWidth = useMemo(
+    () => `${labelColumnWidth + displayDays.length * dayColumnWidth}px`,
+    [dayColumnWidth, displayDays.length, labelColumnWidth],
+  );
+
+  /** 今日が何列目か。期間外なら -1 */
+  const todayColumnIndex = useMemo(() => {
+    const todayKey = ymdKey(new Date());
+    return displayDays.findIndex((day) => ymdKey(day) >= todayKey);
+  }, [displayDays]);
+
+  // ビューポート幅と、表の高さを測る
+  useEffect(() => {
+    const viewport = chartViewportRef.current;
+    const content = chartContentRef.current;
+    if (!viewport || !content) return;
+
+    const update = () => {
+      setViewportWidth(viewport.clientWidth);
+      setScaledHeight(content.scrollHeight + CHART_INSET_PX);
+    };
+    update();
+
+    const observer = new ResizeObserver(update);
+    observer.observe(viewport);
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, [chart]);
+
+  // 今日が左端に来るところまで横スクロールする（初回だけ）
+  useEffect(() => {
+    const viewport = chartViewportRef.current;
+    if (!viewport) return;
+    if (didScrollToTodayRef.current) return;
+    if (todayColumnIndex < 0 || dayColumnWidth <= 0) return;
+
+    viewport.scrollLeft = todayColumnIndex * dayColumnWidth;
+    didScrollToTodayRef.current = true;
+  }, [todayColumnIndex, dayColumnWidth]);
+
+  /**
+   * ズームを1段階変える。
+   * 列幅が変わると表は左端を起点に伸縮するので、左端の日付を覚えておいて後で戻す。
+   */
+  const changeZoom = useCallback(
+    (direction: 1 | -1) => {
+      const viewport = chartViewportRef.current;
+
+      if (viewport && dayColumnWidth > 0) {
+        zoomAnchorRef.current = viewport.scrollLeft / dayColumnWidth;
+      }
+
+      setZoom((current) => stepZoom(current, direction));
+    },
+    [dayColumnWidth],
+  );
+
+  // 列幅が変わったら、覚えておいた日付が左端に来るようスクロールし直す
+  useEffect(() => {
+    const viewport = chartViewportRef.current;
+    const anchor = zoomAnchorRef.current;
+
+    if (!viewport || anchor === null || dayColumnWidth <= 0) return;
+
+    zoomAnchorRef.current = null;
+    viewport.scrollLeft = anchor * dayColumnWidth;
+  }, [dayColumnWidth]);
+
+  // 全画面のあいだはフッターを隠す
+  useEffect(() => {
+    if (!isFullscreen) return;
+
+    document.body.dataset.chartFullscreen = "1";
+    return () => {
+      delete document.body.dataset.chartFullscreen;
+    };
+  }, [isFullscreen]);
 
   if (loading) {
     return (
@@ -297,22 +467,95 @@ export default function PeriodChartClient({
 
   return (
     <main className="min-h-dvh bg-gray-50 dark:bg-gray-950">
-      <div className="mx-auto w-full max-w-6xl px-4 py-6">
-        <div className="rounded-2xl border bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+      <div
+        className={`mx-auto w-full max-w-7xl ${
+          isFullscreen ? "px-0 py-0" : "px-2 py-2"
+        }`}
+      >
+        <div
+          className={`bg-white shadow-sm dark:bg-gray-900 ${
+            isFullscreen ? "p-0" : "rounded-2xl border p-2 dark:border-gray-800"
+          }`}
+        >
           {!chart ? (
-            <div className="mt-6 rounded-2xl border border-dashed border-gray-300 p-6 text-sm text-gray-600 dark:border-gray-700 dark:text-gray-300">
-              この現場には区間工程表データがありません。
+            <div className="rounded-2xl border border-dashed border-gray-300 p-6 text-sm text-gray-600 dark:border-gray-700 dark:text-gray-300">
+              この現場には期間工程表データがありません。
             </div>
           ) : (
             <>
-              <div className="overflow-x-hidden rounded-2xl border dark:border-gray-800">
+              <div className="relative rounded-xl border dark:border-gray-800">
+                {/* ズームと全画面はチャートに重ねて置く（縦の領域を使わない） */}
                 <div
-                  className="grid w-full border-b bg-gray-50 dark:border-gray-800 dark:bg-gray-950"
+                  className="absolute bottom-3 right-3 z-50 flex items-center gap-1 rounded-full border border-gray-300/80 bg-white/90 px-1 py-1 shadow-lg backdrop-blur dark:border-gray-600/80 dark:bg-gray-900/90"
+                >
+                  <button
+                    type="button"
+                    onClick={() => changeZoom(-1)}
+                    disabled={zoom <= ZOOM_STEPS[0]}
+                    aria-label="縮小"
+                    className="flex h-7 w-7 items-center justify-center rounded-full text-base font-extrabold leading-none text-gray-700 disabled:opacity-30 dark:text-gray-200"
+                  >
+                    −
+                  </button>
+
+                  <span className="min-w-[2.4rem] text-center text-[11px] font-extrabold tabular-nums text-gray-600 dark:text-gray-300">
+                    {Math.round(zoom * 100)}%
+                  </span>
+
+                  <button
+                    type="button"
+                    onClick={() => changeZoom(1)}
+                    disabled={zoom >= ZOOM_STEPS[ZOOM_STEPS.length - 1]}
+                    aria-label="拡大"
+                    className="flex h-7 w-7 items-center justify-center rounded-full text-base font-extrabold leading-none text-gray-700 disabled:opacity-30 dark:text-gray-200"
+                  >
+                    ＋
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setIsFullscreen((v) => !v)}
+                    aria-pressed={isFullscreen}
+                    aria-label={isFullscreen ? "全画面を終了" : "全画面表示"}
+                    className="ml-0.5 flex h-7 items-center rounded-full px-2 text-[11px] font-extrabold leading-none text-gray-700 dark:text-gray-200"
+                  >
+                    {isFullscreen ? "戻す" : "全画面"}
+                  </button>
+                </div>
+
+                <div
+                  ref={chartViewportRef}
+                  className="relative overflow-auto p-1"
                   style={{
-                    gridTemplateColumns: chartGridTemplate,
+                    maxHeight: isFullscreen
+                      ? CHART_FULLSCREEN_HEIGHT
+                      : CHART_MAX_HEIGHT,
+                    height: isFullscreen ? undefined : (scaledHeight ?? undefined),
+                    touchAction: "pan-x pan-y",
                   }}
                 >
-                  <div className="border-r px-2 py-1 text-[10px] font-extrabold sm:px-2 sm:py-1.5 sm:text-xs dark:border-gray-800 flex items-center">
+                <div
+                  ref={chartContentRef}
+                  className="relative"
+                  style={{
+                    width: `max(${chartMinWidth}, 100%)`,
+                    minWidth: chartMinWidth,
+                  }}
+                >
+                <div
+                  className="sticky top-0 z-30 grid min-w-full border-b bg-gray-50 dark:border-gray-800 dark:bg-gray-950"
+                  style={{
+                    gridTemplateColumns: chartGridTemplate,
+                    minWidth: chartMinWidth,
+                  }}
+                >
+                  <div
+                    className="sticky left-0 z-20 flex items-center border-r bg-gray-50 px-1.5 py-1 font-extrabold dark:border-gray-800 dark:bg-gray-950"
+                    style={{
+                      minHeight: verticalSizing.dayHeaderHeight,
+                      fontSize: verticalSizing.labelFontPx,
+                    }}
+                  >
                     工区 / 工種
                   </div>
                   {displayDays.map((day) => {
@@ -323,14 +566,26 @@ export default function PeriodChartClient({
                     return (
                       <div
                         key={key}
-                        className={`border-r px-0.5 py-0.5 text-center text-[9px] leading-none sm:px-0.5 sm:py-1 sm:text-[10px] dark:border-gray-800 ${mondayBorder} ${
+                        className={`border-r px-0.5 py-1 text-center leading-none dark:border-gray-800 ${mondayBorder} ${
                           off
                             ? "bg-rose-50 text-rose-700 dark:bg-rose-950/30 dark:text-rose-200"
                             : "text-gray-700 dark:text-gray-200"
                         }`}
+                        style={{
+                          minHeight: verticalSizing.dayHeaderHeight,
+                          fontSize: 10,
+                        }}
                       >
-                        <div className="font-bold leading-none">{key.slice(5)}</div>
-                        <div className="leading-none">{weekdayLabel(day)}</div>
+                        {/* 列が細いので「日」と曜日1文字だけ */}
+                        <div className="font-bold leading-none overflow-hidden whitespace-nowrap">
+                          {day.getDate()}
+                        </div>
+                        <div
+                          className="leading-none overflow-hidden whitespace-nowrap"
+                          style={{ fontSize: 9 }}
+                        >
+                          {weekdayLabel(day)}
+                        </div>
                       </div>
                     );
                   })}
@@ -341,8 +596,20 @@ export default function PeriodChartClient({
                     key={group}
                     className="border-b last:border-b-0 dark:border-gray-800"
                   >
-                    <div className="border-b bg-gray-100 px-2 py-[1px] text-[10px] font-extrabold text-gray-900 dark:border-gray-800 dark:bg-gray-900 dark:text-gray-100 leading-none">
-                      {group}
+                    <div
+                      className="flex items-center border-b bg-gray-100 py-px font-extrabold leading-none text-gray-900 dark:border-gray-800 dark:bg-gray-900 dark:text-gray-100"
+                      style={{
+                        minHeight: verticalSizing.groupHeaderHeight,
+                        fontSize: verticalSizing.labelFontPx,
+                      }}
+                    >
+                      {/*
+                        この行は全幅のブロックなので、箱に sticky を付けても
+                        中の文字は左端に置かれたまま流れてしまう。文字側を固定する。
+                      */}
+                      <span className="sticky left-0 z-10 bg-gray-100 px-1.5 dark:bg-gray-900">
+                        {group}
+                      </span>
                     </div>
 
                     {rows.length === 0 ? (
@@ -353,19 +620,27 @@ export default function PeriodChartClient({
                       rows.map((row, rowIndex) => (
                         <div
                           key={`${group}-${row.label}-${rowIndex}`}
-                          className="grid w-full"
+                          className="grid"
                           style={{
                             gridTemplateColumns: chartGridTemplate,
-                            gridAutoRows: "14px",
+                            gridAutoRows: `${verticalSizing.rowHeight}px`,
+                            minWidth: chartMinWidth,
                           }}
                         >
-                          <div className="border-r px-2 py-[1px] text-[9px] font-bold text-gray-900 sm:px-2 sm:py-[1px] sm:text-[10px] dark:border-gray-800 dark:text-gray-100 flex items-center">
-                            <div className="flex items-center gap-1.5">
+                          <div
+                            className="sticky left-0 z-10 flex min-w-0 items-center border-r bg-white px-1.5 py-px font-bold text-gray-900 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-100"
+                            style={{ fontSize: verticalSizing.labelFontPx }}
+                          >
+                            <div className="flex w-full min-w-0 items-center gap-1.5">
                               <span
-                                className="inline-block h-2 w-2 rounded-sm sm:h-2.5 sm:w-2.5"
-                                style={{ backgroundColor: row.color }}
+                                className="inline-block shrink-0 rounded-sm"
+                                style={{
+                                  backgroundColor: row.color,
+                                  height: verticalSizing.swatchSize,
+                                  width: verticalSizing.swatchSize,
+                                }}
                               />
-                              <span className="break-words leading-none">
+                              <span className="block min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap leading-none">
                                 {row.label}
                               </span>
                             </div>
@@ -421,7 +696,7 @@ export default function PeriodChartClient({
                               >
                                 {visibleActive ? (
                                   <div
-                                    className={`w-full ${rowHeightClass} ${
+                                    className={`h-full w-full ${
                                       barStart && barEnd
                                         ? "rounded-md"
                                         : barStart
@@ -432,10 +707,8 @@ export default function PeriodChartClient({
                                     }`}
                                     style={{
                                       backgroundColor: row.color,
-                                      marginLeft: prevVisibleActive ? -1 : 1,
-                                      marginRight: nextVisibleActive ? -1 : 1,
-                                      marginTop: "auto",
-                                      marginBottom: "auto",
+                                      marginLeft: prevVisibleActive ? -1 : 0,
+                                      marginRight: nextVisibleActive ? -1 : 0,
                                     }}
                                     title={`${row.label} / ${key}`}
                                   />
@@ -450,6 +723,8 @@ export default function PeriodChartClient({
                     )}
                   </div>
                 ))}
+                </div>
+                </div>
               </div>
             </>
           )}

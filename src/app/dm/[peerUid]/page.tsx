@@ -661,49 +661,6 @@ export default function DmPage() {
     return `${peerUid}__${meUid}`; // legacy reverse
   }, [meUid, peerUid]);
 
-  async function sendProjectPhotoAttachment(photo: ProjectPhotoOption) {
-    if (!projectId || !roomId) return;
-
-    try {
-      setSending(true);
-      setErrorText(null);
-
-      const colRef = collection(
-        db,
-        "projects",
-        projectId,
-        "dmRooms",
-        roomId,
-        "messages",
-      );
-
-      const payload: Msg = {
-        text: "",
-        senderUid: meUid,
-        senderName: meName,
-        toUid: peerUid,
-        readBy: [meUid],
-        createdAt: serverTimestamp(),
-        createdAtMs: Date.now(),
-        mediaUrl: photo.url,
-        mediaType: "image",
-        fileName: photo.name,
-        fileUrl: photo.url,
-        fileType: "image/jpeg",
-      };
-
-      await addDoc(colRef, payload);
-
-      setPhotoPickerOpen(false);
-      stickToBottomRef.current = true;
-    } catch (e) {
-      console.log("dm send project photo error:", e);
-      setErrorText("工事写真の送信に失敗しました。通信状況をご確認ください。");
-    } finally {
-      setSending(false);
-    }
-  }
-
   const resizeTextarea = useCallback(() => {
     const el = textareaRef.current;
     if (!el) return;
@@ -770,7 +727,7 @@ export default function DmPage() {
         const name =
           (myData ? toNonEmptyString(myData.name) : "") ||
           toNonEmptyString(u.displayName) ||
-          "職人";
+          "作業員";
         setMeName(name);
 
         setLoading(false);
@@ -1082,19 +1039,48 @@ export default function DmPage() {
   const peerName = toNonEmptyString(peer?.name) || "相手";
 
   return (
-    <main className="min-h-dvh bg-gray-50 dark:bg-gray-950">
+    <main
+      className="flex flex-col overflow-hidden bg-white dark:bg-gray-950 sm:bg-gray-50 dark:sm:bg-gray-950"
+      style={{
+        height: "calc(var(--app-vh, 100dvh) - var(--craftsman-nav-height))",
+      }}
+    >
       {/* header */}
-      <div className="sticky top-0 z-10 border-b bg-white/90 backdrop-blur dark:border-gray-800 dark:bg-gray-950/80">
-        <div className="mx-auto flex w-full max-w-2xl items-center justify-between gap-3 px-4 py-3">
+      <div className="sticky top-0 z-30 border-b border-gray-200 bg-white/95 backdrop-blur dark:border-gray-800 dark:bg-gray-950/95 sm:hidden">
+        <div className="mx-auto flex w-full max-w-3xl items-center justify-between gap-3 px-3 py-2">
+          <button
+            type="button"
+            onClick={() =>
+              router.push(
+                `/projects/${encodeURIComponent(projectId)}/managers`,
+              )
+            }
+            className="shrink-0 inline-flex h-10 w-10 items-center justify-center rounded-full bg-white/80 text-gray-900 shadow-sm dark:bg-gray-900 dark:text-gray-100"
+            aria-label="戻る"
+          >
+            <ArrowLeft className="h-5 w-5" />
+          </button>
           <div className="min-w-0">
-            <div className="truncate text-sm font-extrabold text-gray-900 dark:text-gray-100">
+            <div className="truncate text-base font-extrabold text-gray-900 dark:text-gray-100">
               DM：{peerName}
             </div>
-            <div className="truncate text-xs font-bold text-gray-500 dark:text-gray-400">
+            <div className="truncate text-[11px] font-bold text-gray-600 dark:text-gray-300">
               現場：{session?.projectName || "（名称未設定）"}
             </div>
           </div>
+        </div>
+      </div>
 
+      <div className="mx-auto flex h-full w-full max-w-3xl flex-1 flex-col px-0 sm:px-4 sm:py-6">
+        <div className="hidden min-w-0 items-start justify-between gap-3 px-4 pt-3 sm:flex sm:px-0 sm:pt-0">
+          <div className="min-w-0">
+            <h1 className="truncate text-xl font-extrabold text-gray-900 dark:text-gray-100">
+              DM：{peerName}
+            </h1>
+            <p className="mt-1 truncate text-sm font-bold text-gray-600 dark:text-gray-300">
+              現場：{session?.projectName || "（名称未設定）"}
+            </p>
+          </div>
           <button
             type="button"
             onClick={() =>
@@ -1108,28 +1094,32 @@ export default function DmPage() {
             <ArrowLeft className="h-4 w-4" />
           </button>
         </div>
-      </div>
 
       {/* body */}
-      <div className="mx-auto w-full max-w-2xl px-3 pt-3 pb-24">
+      <div className="mt-0 flex min-h-0 flex-1 flex-col sm:mt-4">
         {errorText && (
-          <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3">
+          <div className="mx-3 mb-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 sm:mx-0">
             <p className="text-sm font-semibold text-red-700">{errorText}</p>
           </div>
         )}
 
-        <div className="rounded-2xl border bg-white dark:border-gray-800 dark:bg-gray-900 overflow-hidden">
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-none border-0 bg-transparent shadow-none sm:rounded-2xl sm:border sm:bg-white dark:sm:border-gray-800 dark:sm:bg-gray-900">
+          <div className="hidden border-b border-gray-200 px-6 py-3 dark:border-gray-800 sm:block">
+            <div className="text-base font-extrabold text-gray-900 dark:text-gray-100">
+              メッセージ
+            </div>
+          </div>
           <div
             ref={listRef}
             onScroll={handleScroll}
-            className="h-[calc(100dvh-230px)] overflow-y-auto px-3 py-3 pb-28"
+            className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto bg-transparent p-3"
           >
             {msgs.length === 0 ? (
-              <div className="rounded-xl border bg-white p-4 text-sm font-bold text-gray-700 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-200">
+              <div className="text-sm font-bold text-gray-600 dark:text-gray-300">
                 まだメッセージがありません。
               </div>
             ) : (
-              <div className="grid gap-2">
+              <div className="space-y-2">
                 {msgs.map((m) => {
                   const mine = m.data.senderUid === meUid;
                   const sender = toNonEmptyString(m.data.senderName) || "不明";
@@ -1144,13 +1134,19 @@ export default function DmPage() {
                         mine ? "flex justify-end" : "flex justify-start"
                       }
                     >
-                      <div className="max-w-[90%]">
+                      <div
+                        className={
+                          mine
+                            ? "flex max-w-[85%] flex-col items-end"
+                            : "flex max-w-[85%] flex-col items-start"
+                        }
+                      >
                         <div
                           className={[
-                            "rounded-2xl border px-3 py-2",
+                            "w-full rounded-2xl px-3 py-2 text-left text-sm font-bold shadow-sm",
                             mine
-                              ? "bg-blue-600 text-white border-blue-600"
-                              : "bg-white text-gray-900 dark:bg-gray-950 dark:text-gray-100 dark:border-gray-800",
+                              ? "bg-[#95ec69] text-gray-900"
+                              : "bg-white text-gray-900 dark:bg-gray-100 dark:text-gray-900",
                           ].join(" ")}
                         >
                           {!mine && (
@@ -1164,7 +1160,7 @@ export default function DmPage() {
                             <img
                               src={media.url}
                               alt={media.fileName}
-                              className="mb-2 max-h-64 max-w-full rounded-xl"
+                              className="mb-2 max-h-72 max-w-full rounded-md border border-black/10 object-contain dark:border-white/10"
                               loading="lazy"
                             />
                           )}
@@ -1173,7 +1169,7 @@ export default function DmPage() {
                             <video
                               src={media.url}
                               controls
-                              className="mb-2 max-h-64 max-w-full rounded-xl"
+                              className="mb-2 max-h-72 max-w-full rounded-md border border-black/10 bg-black object-contain dark:border-white/10"
                             />
                           )}
 
@@ -1198,7 +1194,7 @@ export default function DmPage() {
                             )}
 
                           {body && (
-                            <div className="whitespace-pre-wrap text-sm font-bold leading-relaxed">
+                            <div className="whitespace-pre-wrap break-words">
                               {body}
                             </div>
                           )}
@@ -1224,7 +1220,7 @@ export default function DmPage() {
 
           {photoPickerOpen && (
             <div
-              className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 px-4"
+              className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
               onClick={() => setPhotoPickerOpen(false)}
             >
               <div
@@ -1336,7 +1332,7 @@ export default function DmPage() {
             </div>
           )}
           {/* composer */}
-          <div className="fixed inset-x-0 bottom-0 z-20 border-t bg-white/95 px-3 py-3 backdrop-blur dark:border-gray-800 dark:bg-gray-900/95">
+          <div className="shrink-0 space-y-2 border-t border-gray-200 bg-white/95 px-3 py-3 backdrop-blur dark:border-gray-800 dark:bg-gray-950/95 sm:bg-transparent dark:sm:bg-transparent">
             {sending && (
               <div className="mx-auto mb-2 flex w-full max-w-2xl items-center gap-2 text-xs font-extrabold text-gray-600 dark:text-gray-300">
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -1421,10 +1417,20 @@ export default function DmPage() {
                 value={text}
                 onChange={(e) => setText(e.target.value)}
                 onInput={resizeTextarea}
+                onKeyDown={(e) => {
+                  // ⌘+Enter（Windows は Ctrl+Enter）で送信
+                  if (
+                    e.key === "Enter" &&
+                    (e.metaKey || e.ctrlKey) &&
+                    !e.nativeEvent.isComposing
+                  ) {
+                    e.preventDefault();
+                    void send();
+                  }
+                }}
                 placeholder="メッセージを入力..."
                 rows={1}
-                className="min-h-11 max-h-40 w-full resize-none overflow-hidden rounded-xl border px-3 py-2 font-bold text-gray-900
-                           focus:outline-none dark:border-gray-800 dark:bg-gray-950 dark:text-gray-100"
+                className="h-10 min-h-10 max-h-40 w-full resize-none overflow-hidden rounded-md border border-gray-200 bg-white px-3 py-2 font-bold leading-6 text-gray-900 focus:outline-none placeholder:text-gray-400 dark:border-gray-800 dark:bg-gray-900 dark:text-gray-100"
                 style={{ fontSize: 16 }}
                 disabled={sending}
               />
@@ -1433,28 +1439,24 @@ export default function DmPage() {
                 type="button"
                 onClick={() => void send()}
                 disabled={sending || (!toNonEmptyString(text) && !file && selectedProjectPhotos.length === 0)}
-                className="shrink-0 inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-sm font-extrabold text-white disabled:opacity-60"
+                className="shrink-0 inline-flex h-11 w-11 items-center justify-center rounded-full bg-[#06c755] p-0 text-white shadow-sm hover:bg-[#05b64b] disabled:cursor-not-allowed disabled:opacity-60"
+                aria-label="送信"
               >
                 {sending ? (
-                  <>
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    送信中
-                  </>
+                  <Loader2 className="h-5 w-5 animate-spin" />
                 ) : (
-                  <>
-                    <Send className="h-4 w-4" />
-                    送信
-                  </>
+                  <Send className="h-5 w-5" />
                 )}
               </button>
             </div>
 
-            <div className="mx-auto mt-2 w-full max-w-2xl text-[11px] font-bold text-gray-500 dark:text-gray-400">
+            <div className="mx-auto w-full max-w-2xl text-[11px] font-bold text-gray-500 dark:text-gray-400">
               ※
               画像/動画/PDFのみ添付可。動画は1分以内です。工事写真添付から現場写真も送信できます。
             </div>
           </div>
         </div>
+      </div>
       </div>
     </main>
   );

@@ -1,0 +1,381 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    /* =========================
+       共通関数（Storage → Firestore参照）
+       ※ Storage rules では (default) を使います
+    ========================= */
+
+    function isLogin() {
+      return request.auth != null;
+    }
+
+    function projectDoc(projectId) {
+      return firestore.get(/databases/(default)/documents/projects/$(projectId));
+    }
+
+    function isOwner(projectId) {
+      return isLogin()
+        && projectDoc(projectId).data.ownerUid == request.auth.uid;
+    }
+
+    function isProjectMember(projectId) {
+      return isLogin()
+        && (
+          isOwner(projectId)
+          || firestore.exists(/databases/(default)/documents/projects/$(projectId)/members/$(request.auth.uid))
+        );
+    }
+
+    function isManaFinance(projectId) {
+      return isLogin()
+        && firestore.exists(/databases/(default)/documents/reNovaMember/$(request.auth.uid))
+        && firestore.get(/databases/(default)/documents/reNovaMember/$(request.auth.uid)).data.procManaAccessEnabled == true
+        && (
+          firestore.get(/databases/(default)/documents/procmanaProjects/$(projectId)).data.ownerUid == request.auth.uid
+          || (
+            firestore.exists(/databases/(default)/documents/users/$(request.auth.uid)/procManaProjects/$(projectId))
+            && firestore.get(/databases/(default)/documents/users/$(request.auth.uid)/procManaProjects/$(projectId)).data.active == true
+            && firestore.get(/databases/(default)/documents/users/$(request.auth.uid)/procManaProjects/$(projectId)).data.managementRole in ["owner", "admin", "accounting"]
+          )
+        );
+    }
+
+    function isVideo() {
+      return request.resource != null
+        && request.resource.contentType != null
+        && request.resource.contentType.matches('video/.*');
+    }
+
+    // ✅ 写真公開フラグ（public/config が無い時に get で落ちないように exists を挟む）
+    function isPhotoPublic(projectId) {
+      return firestore.exists(/databases/(default)/documents/projects/$(projectId)/public/config)
+        && firestore.get(/databases/(default)/documents/projects/$(projectId)/public/config).data.photoPublic == true;
+    }
+
+    // photos の Firestore doc（shotByUid参照用）
+    function photoDoc(projectId, subtitleId, workTypeId, photoId) {
+      return firestore.get(
+        /databases/(default)/documents/projects/$(projectId)/subtitles/$(subtitleId)/workTypes/$(workTypeId)/photos/$(photoId)
+      );
+    }
+
+    function photoDocExists(projectId, subtitleId, workTypeId, photoId) {
+      return firestore.exists(
+        /databases/(default)/documents/projects/$(projectId)/subtitles/$(subtitleId)/workTypes/$(workTypeId)/photos/$(photoId)
+      );
+    }
+
+    function isPhotoShooter(projectId, subtitleId, workTypeId, photoId) {
+      return isLogin()
+        && photoDocExists(projectId, subtitleId, workTypeId, photoId)
+        && photoDoc(projectId, subtitleId, workTypeId, photoId).data.shotByUid == request.auth.uid;
+    }
+
+    function isImage() {
+      return request.resource != null
+        && request.resource.contentType != null
+        && request.resource.contentType.matches('image/.*');
+    }
+
+    /* =========================
+       photos/original
+       - read: member or public
+       - create: member（新規のみ）※上書き禁止
+       - delete: owner or shooter（memberは自分のだけ）
+       - update: 禁止（上書き禁止）
+    ========================= */
+
+    match /projects/{projectId}/subtitles/{subtitleId}/workTypes/{workTypeId}/photos/original/{photoFile} {
+
+      // photoFile は "{photoId}.jpg" 想定なので photoId を抽出
+      function photoId() {
+        return photoFile.replace('.jpg', '');
+      }
+
+      allow read: if isProjectMember(projectId) || isPhotoPublic(projectId);
+
+      // ✅ 新規アップロードのみ許可（既存ファイルへの上書き = 改竄扱いで禁止）
+      // ※ Firestore doc の shotByUid と突合したい気持ちはあるが、
+      //    あなたの実装は「Storage→Firestore setDoc」なので、この時点で doc が無い可能性があるため行わない。
+    	allow create: if isProjectMember(projectId)
+ 				&& resource == null
+  			&& isImage();
+
+      // ✅ update/overwrite は禁止
+      allow update: if false;
+
+      // ✅ delete: owner は常にOK。member は Firestore の shotByUid が本人の時だけOK
+      // （syncPendingDeletes が「Storage削除 → Firestore削除」の順なのでここで弾かれない）
+      allow delete: if isOwner(projectId)
+        || isPhotoShooter(projectId, subtitleId, workTypeId, photoId());
+    }
+
+    match /projects/{projectId}/subtitles/{subtitleId}/workTypes/{workTypeId}/photos/pdf/{photoFile} {
+  		function photoId() {
+    		return photoFile.replace('.jpg', '');
+  		}
+  		allow read: if isProjectMember(projectId) || isPhotoPublic(projectId);
+  		allow create: if isProjectMember(projectId)
+  		  && resource == null
+   		  && isImage();
+  		allow update: if false;
+  		allow delete: if isOwner(projectId)
+    		|| isPhotoShooter(projectId, subtitleId, workTypeId, photoId());
+}
+
+        /* =========================
+       boards (PDF)
+       - read: Firestoreと同じく現状は true（未ログインでも閲覧OK）
+       - create: memberのみ、新規のみ、PDFのみ（上書き禁止）
+       - delete: owner もしくは アップロード本人（uploadedByUid）
+       - update: 禁止（上書き禁止）
+    ========================= */
+
+    function isPdf() {
+      return request.resource != null
+        && request.resource.contentType != null
+        && request.resource.contentType == "application/pdf";
+    }
+
+    function boardPdfDoc(projectId, docId) {
+      return firestore.get(/databases/(default)/documents/projects/$(projectId)/boardPdfs/$(docId));
+    }
+
+    function boardPdfDocExists(projectId, docId) {
+      return firestore.exists(/databases/(default)/documents/projects/$(projectId)/boardPdfs/$(docId));
+    }
+
+    function projectChatMessageDoc(projectId, roomId, messageId) {
+      return firestore.get(
+        /databases/(default)/documents/projects/$(projectId)/chatRooms/$(roomId)/messages/$(messageId)
+      );
+    }
+
+    function projectChatMessageDocExists(projectId, roomId, messageId) {
+      return firestore.exists(
+        /databases/(default)/documents/projects/$(projectId)/chatRooms/$(roomId)/messages/$(messageId)
+      );
+    }
+
+    function isProjectChatSender(projectId, roomId, messageId) {
+      return isLogin()
+        && projectChatMessageDocExists(projectId, roomId, messageId)
+        && projectChatMessageDoc(projectId, roomId, messageId).data.senderUid == request.auth.uid;
+    }
+
+    function isBoardPdfUploader(projectId, docId) {
+      return isLogin()
+        && boardPdfDocExists(projectId, docId)
+        && boardPdfDoc(projectId, docId).data.uploadedByUid == request.auth.uid;
+    }
+
+    function photoExportJobDoc(jobId) {
+      return firestore.get(/databases/(default)/documents/photoExportJobs/$(jobId));
+    }
+
+    function photoExportJobDocExists(jobId) {
+      return firestore.exists(/databases/(default)/documents/photoExportJobs/$(jobId));
+    }
+
+    function isPhotoExportJobOwner(jobId) {
+      return isLogin()
+        && photoExportJobDocExists(jobId)
+        && photoExportJobDoc(jobId).data.ownerUid == request.auth.uid;
+    }
+
+    // 保存先: projects/{projectId}/boards/{target}/{docId}.pdf
+    match /projects/{projectId}/boards/{target}/{pdfFile} {
+
+      function docId() {
+        return pdfFile.replace(".pdf", "");
+      }
+
+      // boardPdfs と同じく project member のみ閲覧可
+      allow read: if isProjectMember(projectId);
+
+      // 新規アップロードのみ許可（上書き禁止）
+      allow create: if isProjectMember(projectId)
+        && resource == null
+        && isPdf();
+
+      // 上書きは禁止
+      allow update: if false;
+
+      // owner または アップした本人のみ削除可
+      allow delete: if isOwner(projectId) || isBoardPdfUploader(projectId, docId());
+    }
+
+
+      /* =========================
+       dm attachments
+       保存先: projects/{projectId}/dm/{roomKey}/{fileName}
+       - read: project member
+       - create: project member、新規のみ、画像/動画/PDFのみ
+       - update: 禁止（上書き禁止）
+       - delete: 禁止
+    ========================= */
+
+    match /projects/{projectId}/dm/{roomKey}/{fileName} {
+      allow read: if isProjectMember(projectId);
+
+      allow create: if isProjectMember(projectId)
+        && resource == null
+        && (
+          isImage()
+          || isVideo()
+          || isPdf()
+        );
+
+      allow update: if false;
+
+      allow delete: if false;
+    }
+
+        /* =========================
+       project chat attachments
+       保存先: projects/{projectId}/chatRooms/{roomId}/messages/{messageId}/{fileName}
+       - read: project member
+       - create: project member、新規のみ、画像/動画/PDFのみ
+       - update: 禁止（上書き禁止）
+       - delete: owner または送信者本人
+    ========================= */
+
+    match /projects/{projectId}/chatRooms/{roomId}/messages/{messageId}/{fileName} {
+      allow read: if isProjectMember(projectId);
+
+      allow create: if isProjectMember(projectId)
+        && resource == null
+        && (
+          isImage()
+          || isVideo()
+          || isPdf()
+        );
+
+      allow update: if false;
+
+      allow delete: if false;
+    }
+
+    /* =========================
+       工事関係書類保管庫
+       保存先: projects/{projectId}/documents/{fileName}
+       - read: project member またはProcMana経営管理権限
+       - create: project member またはProcMana経営管理権限、新規のみ
+       - update: 禁止
+       - delete: owner または アップロード本人
+    ========================= */
+    match /projects/{projectId}/documents/{fileName} {
+      allow read: if isProjectMember(projectId) || isManaFinance(projectId);
+      allow create: if (isProjectMember(projectId) || isManaFinance(projectId))
+        && resource == null
+        && request.resource != null
+        && (
+          (isVideo() && request.resource.size <= 200 * 1024 * 1024)
+          || (!isVideo() && request.resource.size <= 50 * 1024 * 1024)
+        );
+      allow update: if false;
+      allow delete: if isOwner(projectId) || isProjectMember(projectId);
+    }
+
+    /* =========================
+       箇所写真管理
+       保存先: projects/{projectId}/locationPhotos/{fileName}
+       - read: project member
+       - create: owner/admin のみ、新規のみ
+       - update: 禁止
+       - delete: owner または project member
+    ========================= */
+    match /projects/{projectId}/locationPhotos/{fileName} {
+      allow read: if isProjectMember(projectId);
+      allow create: if isProjectMember(projectId)
+        && resource == null;
+      allow update: if false;
+      allow delete: if isOwner(projectId) || isProjectMember(projectId);
+    }
+
+    /* =========================
+   renova group dm attachments
+   保存先: renovaGroups/{groupId}/dm/{roomKey}/{fileName}
+   - read: group member
+   - create: group member、新規のみ、画像/動画のみ
+   - update: 禁止（上書き禁止）
+  - delete: 禁止
+		========================= */
+		function isRenovaGroupMember(groupId) {
+  		return isLogin()
+   		 && firestore.exists(
+      /databases/(default)/documents/renovaGroups/$(groupId)/members/$(request.auth.uid)
+    		);
+		}
+		match /renovaGroups/{groupId}/dm/{roomKey}/{fileName} {
+  		allow read: if isRenovaGroupMember(groupId);
+  		allow create: if isRenovaGroupMember(groupId)
+    		&& resource == null
+    		&& (isImage() || isVideo() || isPdf());
+  		allow update: if false;
+    	allow delete: if false;
+		}
+		match /renovaGroups/{groupId}/groupChats/{roomKey}/{fileName} {
+  		allow read: if isRenovaGroupMember(groupId);
+  		allow create: if isRenovaGroupMember(groupId)
+  		  && resource == null
+   		 && (isImage() || isVideo() || isPdf());
+ 		 allow update: if false;
+    	allow delete: if false;
+		}
+		// 工区別PDF用の保存先:
+		// projects/{projectId}/boards/{target}/koku/{sectionId}/{kokuKey}/{docId}.pdf
+		match /projects/{projectId}/boards/{target}/koku/{sectionId}/{kokuKey}/{pdfFile} {
+ 		 function docId() {
+  		  return pdfFile.replace(".pdf", "");
+  		}
+  		allow read: if true;
+ 		 allow create: if isProjectMember(projectId)
+  		  && resource == null
+  		  && isPdf();
+ 		 allow update: if false;
+ 		 allow delete: if isOwner(projectId) || isBoardPdfUploader(projectId, docId());
+		}
+		match /projects/{projectId}/boards/{target}/all/{pdfFile} {
+  		function docId() {
+  		  return pdfFile.replace(".pdf", "");
+ 		 }
+  		allow read: if true;
+  		allow create: if isProjectMember(projectId)
+  		  && resource == null
+  		  && isPdf();
+  		allow update: if false;
+  		allow delete: if isOwner(projectId) || isBoardPdfUploader(projectId, docId());
+		}
+		match /photo-export-jobs/{fileName} {
+   	 function jobId() {
+   	   return fileName.replace('.bin', '');
+   	 }
+   	 allow read: if isPhotoExportJobOwner(jobId());
+   	 allow write: if false;
+		}
+
+    // ProcMana契約書・見積添付 — 経営管理権限を持つユーザーのみ
+    match /procmanaProjects/{projectId}/documents/{allPaths=**} {
+      allow read: if isManaFinance(projectId);
+      allow create: if isManaFinance(projectId)
+        && request.resource.size < 20 * 1024 * 1024;
+      allow update: if false;
+      allow delete: if isManaFinance(projectId);
+    }
+
+    // 会社ロゴ — 本人のみ読み書き可
+    match /reNovaMember/{uid}/companies/{companyId}/logo {
+      allow read, write: if isLogin() && request.auth.uid == uid;
+    }
+
+    // プロフィールロゴ — 本人のみ読み書き可
+    match /reNovaMember/{uid}/profileLogo {
+      allow read, write: if isLogin() && request.auth.uid == uid;
+    }
+
+  }
+}

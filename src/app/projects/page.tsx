@@ -16,8 +16,8 @@ import {
 } from "firebase/firestore";
 
 import { auth, db } from "@/lib/firebaseClient";
+import { saveCraftsmanSession } from "@/lib/craftsmanSession";
 import { expandWorkTypesToSubtitleNames } from "@/lib/workItemNames";
-import CraftsmanNavBar from "@/components/CraftsmanNavBar";
 
 type Role = "owner" | "member";
 
@@ -197,7 +197,7 @@ export default function ProjectsPage() {
       const cp = cSnap.exists() ? (cSnap.data() as CraftsmanProfile) : null;
 
       const displayName =
-        toStr(cp?.name) || (auth.currentUser?.displayName ?? "") || "職人";
+        toStr(cp?.name) || (auth.currentUser?.displayName ?? "") || "作業員";
 
       // 4) users/{uid}/myProjects/{projectId}
       // ✅ ここは「権限用 role=member」
@@ -361,6 +361,11 @@ export default function ProjectsPage() {
                 type="button"
                 onClick={() => {
                   if (p.revoked) return;
+                  // メニュー側で工事名を出せるよう、選んだ時点で覚えておく
+                  saveCraftsmanSession({
+                    projectId: p.id,
+                    projectName: p.name || null,
+                  });
                   router.push(`/projects/${encodeURIComponent(p.id)}/menu`);
                 }}
                 className={`rounded-2xl border px-4 py-4 text-left transition-colors ${
@@ -490,7 +495,6 @@ export default function ProjectsPage() {
         </div>
       )}
 
-      <CraftsmanNavBar />
     </main>
   );
 }

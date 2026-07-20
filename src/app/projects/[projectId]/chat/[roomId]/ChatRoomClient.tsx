@@ -931,7 +931,7 @@ export default function ChatRoomClient(props: {
               現場チャット
             </div>
             <div className="truncate text-xs font-bold text-gray-500 dark:text-gray-400">
-              {profile.name}（{profile.role === "manager" ? "監督" : "職人"}）
+              {profile.name}（{profile.role === "manager" ? "管理者" : "作業員"}）
             </div>
           </div>
 
@@ -977,7 +977,7 @@ export default function ChatRoomClient(props: {
                   const fileSize =
                     typeof m.data.fileSize === "number" ? m.data.fileSize : 0;
                   const badge =
-                    m.data.senderRole === "manager" ? "監督" : "職人";
+                    m.data.senderRole === "manager" ? "管理者" : "作業員";
                   const messageMillis = toMillis(m.data.createdAt);
                   const readersForMessage =
                     messageMillis > 0
@@ -1128,7 +1128,7 @@ export default function ChatRoomClient(props: {
 
           {photoPickerOpen && (
             <div
-              className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 px-4"
+              className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
               onClick={() => setPhotoPickerOpen(false)}
             >
               <div
@@ -1256,7 +1256,10 @@ export default function ChatRoomClient(props: {
             </div>
           )}
 
-          <div className="fixed inset-x-0 bottom-0 z-20 border-t bg-white px-2 py-2 pb-[calc(env(safe-area-inset-bottom)+8px)] dark:border-gray-800 dark:bg-gray-900 sm:px-3 sm:py-3 sm:pb-3">
+          <div
+            className="fixed inset-x-0 z-20 border-t bg-white px-2 py-2 dark:border-gray-800 dark:bg-gray-900 sm:px-3 sm:py-3"
+            style={{ bottom: "var(--craftsman-nav-height)" }}
+          >
             <input
               ref={fileInputRef}
               type="file"
@@ -1346,6 +1349,17 @@ export default function ChatRoomClient(props: {
                 value={text}
                 onChange={(e) => setText(e.target.value)}
                 onInput={resizeTextarea}
+                onKeyDown={(e) => {
+                  // ⌘+Enter（Windows は Ctrl+Enter）で送信
+                  if (
+                    e.key === "Enter" &&
+                    (e.metaKey || e.ctrlKey) &&
+                    !e.nativeEvent.isComposing
+                  ) {
+                    e.preventDefault();
+                    void send();
+                  }
+                }}
                 placeholder="メッセージを入力..."
                 rows={1}
                 className="min-h-11 max-h-40 min-w-0 flex-1 resize-none overflow-hidden rounded-xl border px-3 py-2 font-bold text-gray-900 focus:outline-none dark:border-gray-800 dark:bg-gray-950 dark:text-gray-100"

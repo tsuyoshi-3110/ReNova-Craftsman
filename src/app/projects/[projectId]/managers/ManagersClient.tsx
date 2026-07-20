@@ -6,12 +6,13 @@ import { useRouter } from "next/navigation";
 import { onAuthStateChanged } from "firebase/auth";
 import {
   collection,
+  doc,
+  getDoc,
   getDocs,
   limit,
   onSnapshot,
   orderBy,
   query,
-  where,
 } from "firebase/firestore";
 
 import { auth, db } from "@/lib/firebaseClient";
@@ -111,22 +112,39 @@ export default function ManagersClient(props: { initialProjectId: string }) {
         setBusy(true);
         setErrorText(null);
 
-        // ✅ ReNova: projects/{projectId}/members から memberRole == "manager" を取得
+        // 管理者かどうかは reNovaMember に登録があるかで判定する。
+        // members の role / memberRole は運用でばらつきがあり
+        // （role="admin" だが memberRole="member" など）、取りこぼしが出る。
         const colRef = collection(db, "projects", projectId, "members");
-        const qy = query(colRef, where("memberRole", "==", "manager"));
-        const snap = await getDocs(qy);
+        const snap = await getDocs(colRef);
 
-        const rows: Item[] = snap.docs.map((d) => ({
+        const candidates: Item[] = snap.docs.map((d) => ({
           id: d.id,
           data: d.data() as ProjectMemberDoc,
         }));
+
+        const isReNovaMember = await Promise.all(
+          candidates.map(async (item) => {
+            try {
+              const memberSnap = await getDoc(doc(db, "reNovaMember", item.id));
+              return memberSnap.exists();
+            } catch (e) {
+              console.log("reNovaMember check failed:", item.id, e);
+              return false;
+            }
+          }),
+        );
+
+        const rows: Item[] = candidates.filter(
+          (_, index) => isReNovaMember[index],
+        );
 
         if (!mounted) return;
         setItems(rows);
       } catch (e) {
         console.log("managers list error:", e);
         if (!mounted) return;
-        setErrorText("管督員一覧の取得に失敗しました。");
+        setErrorText("管理者一覧の取得に失敗しました。");
       } finally {
         if (!mounted) return;
         setBusy(false);
@@ -204,7 +222,7 @@ export default function ManagersClient(props: { initialProjectId: string }) {
         <div className="flex items-center justify-between gap-2">
           <div>
             <div className="text-lg font-extrabold text-gray-900 dark:text-gray-100">
-              管督員一覧
+              管理者一覧
             </div>
             <div className="text-xs font-bold text-gray-500 dark:text-gray-400">
               現場ID：{projectId}
@@ -236,17 +254,16 @@ export default function ManagersClient(props: { initialProjectId: string }) {
             </div>
           ) : items.length === 0 ? (
             <div className="rounded-2xl border bg-white p-4 text-sm font-bold text-gray-700 dark:border-gray-800 dark:bg-gray-900 dark:text-gray-200">
-              この現場の管督員が見つかりません。
+              この現場の管理者が見つかりません。
             </div>
           ) : (
             items.map((it) => {
               const display =
                 toNonEmptyString(it.data.name) ||
                 toNonEmptyString(it.data.displayName) ||
-                "監督";
+                "管理者";
 
               const company = toNonEmptyString(it.data.company);
-              const phone = toNonEmptyString(it.data.phone);
               const targetUid = toNonEmptyString(it.data.uid) || it.id;
               const unreadCount = unreadByUid[targetUid] ?? 0;
 

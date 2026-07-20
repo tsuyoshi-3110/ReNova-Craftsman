@@ -2,8 +2,10 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
+import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { LogOut } from "lucide-react";
 import {
   onAuthStateChanged,
   sendPasswordResetEmail,
@@ -11,7 +13,7 @@ import {
   signOut,
 } from "firebase/auth";
 import { auth } from "@/lib/firebaseClient";
-import { doc, getDoc } from "firebase/firestore";
+import { deleteDoc, doc, getDoc } from "firebase/firestore";
 import { db } from "@/lib/firebaseClient";
 
 function normalizeText(s: string): string {
@@ -30,6 +32,7 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [resetBusy, setResetBusy] = useState(false);
+  const [deleteBusy, setDeleteBusy] = useState(false);
   const [errorText, setErrorText] = useState<string | null>(null);
   const [successText, setSuccessText] = useState<string | null>(null);
 
@@ -63,11 +66,41 @@ export default function LoginPage() {
     }
   }
 
+  async function onDeleteCraftsmanAccount() {
+    setErrorText(null);
+    setSuccessText(null);
+
+    const user = auth.currentUser;
+    if (!user) {
+      setErrorText("ログイン情報が取得できませんでした。もう一度ログインしてください。");
+      return;
+    }
+
+    const ok = window.confirm(
+      "作業員アカウントを削除します。作業員プロフィールが削除され、ログアウトします。よろしいですか？",
+    );
+    if (!ok) return;
+
+    try {
+      setDeleteBusy(true);
+      await deleteDoc(doc(db, "craftsmen", user.uid));
+      await signOut(auth);
+      setSuccessText("作業員アカウントを削除しました。");
+      router.replace("/login");
+    } catch (e) {
+      console.error("delete craftsman account error:", e);
+      setErrorText("アカウント削除に失敗しました。通信状況をご確認ください。");
+    } finally {
+      setDeleteBusy(false);
+    }
+  }
+
   async function onResetPassword() {
     setErrorText(null);
     setSuccessText(null);
 
-    const normalizedEmail = normalizeText(email);
+    const normalizedEmail =
+      normalizeText(email) || normalizeText(auth.currentUser?.email ?? "");
     if (!normalizedEmail) {
       setErrorText("先にメールアドレスを入力してください。");
       return;
@@ -150,7 +183,18 @@ export default function LoginPage() {
   if (!mounted) return null;
   return (
     <main className="min-h-dvh bg-gray-50 dark:bg-gray-950">
-      <div className="mx-auto w-full max-w-md px-4 py-10">
+      <div className="mx-auto flex min-h-[calc(100dvh-5rem)] w-full max-w-md flex-col justify-center px-4 py-8">
+        <div className="mb-8 flex justify-center">
+          <Image
+            src="/craftsman.png"
+            alt="ProcNova Craftsman"
+            width={312}
+            height={312}
+            priority
+            className="h-[16.5rem] w-[16.5rem] rounded-3xl object-contain sm:h-[19.5rem] sm:w-[19.5rem]"
+          />
+        </div>
+
         <div className="rounded-2xl border bg-white p-6 shadow-sm dark:border-gray-800 dark:bg-gray-900">
           <div className="flex items-center justify-between gap-2">
             <h1 className="text-lg font-extrabold text-gray-900 dark:text-gray-100">
@@ -161,11 +205,12 @@ export default function LoginPage() {
               <button
                 type="button"
                 onClick={() => void onLogout()}
-                disabled={busy}
-                className="rounded-xl border px-3 py-2 text-sm font-extrabold text-gray-900 hover:bg-gray-50 disabled:opacity-60
-                           dark:border-gray-800 dark:text-gray-100 dark:hover:bg-gray-900"
+                disabled={busy || deleteBusy}
+                aria-label="ログアウト"
+                title="ログアウト"
+                className="flex h-10 w-10 items-center justify-center rounded-xl text-gray-500 transition hover:bg-gray-100 active:scale-95 disabled:opacity-40 dark:text-gray-400 dark:hover:bg-gray-800"
               >
-                ログアウト
+                <LogOut className="h-5 w-5" />
               </button>
             )}
           </div>
@@ -182,6 +227,37 @@ export default function LoginPage() {
             </div>
           )}
 
+          {authedUid && (
+            <div className="mt-5 grid gap-3">
+              <button
+                type="button"
+                onClick={() => void onResetPassword()}
+                disabled={busy || resetBusy || deleteBusy}
+                className="w-full rounded-xl border border-blue-300 bg-blue-50 py-3 text-sm font-extrabold text-blue-700 hover:bg-blue-100 disabled:opacity-60
+                           dark:border-blue-900/70 dark:bg-blue-950/30 dark:text-blue-300 dark:hover:bg-blue-950/50"
+              >
+                {resetBusy ? "送信中..." : "パスワードを忘れた方はこちら"}
+              </button>
+              <p className="text-xs font-bold leading-relaxed text-gray-500 dark:text-gray-400">
+                登録メールアドレス宛にパスワード再設定メールを送信します。
+              </p>
+
+              <button
+                type="button"
+                onClick={() => void onDeleteCraftsmanAccount()}
+                disabled={busy || resetBusy || deleteBusy}
+                className="w-full rounded-xl border border-red-300 bg-red-50 py-3 text-sm font-extrabold text-red-700 hover:bg-red-100 disabled:opacity-60
+                           dark:border-red-900/70 dark:bg-red-950/30 dark:text-red-300 dark:hover:bg-red-950/50"
+              >
+                {deleteBusy ? "削除中..." : "作業員アカウント削除"}
+              </button>
+              <p className="text-xs font-bold leading-relaxed text-gray-500 dark:text-gray-400">
+                ※
+                Proclink共通のログイン情報は残し、このアプリの作業員プロフィールを削除します。
+              </p>
+            </div>
+          )}
+
           {!authedUid && (
             <div className="mt-5 grid gap-3">
               <label className="block">
@@ -193,7 +269,8 @@ export default function LoginPage() {
                   style={{ fontSize: 16 }}
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  disabled={busy}
+                  disabled={busy || resetBusy}
+                  autoComplete="email"
                   inputMode="email"
                   placeholder="例）aaa@example.com"
                 />
@@ -210,6 +287,7 @@ export default function LoginPage() {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   disabled={busy}
+                  autoComplete="current-password"
                   placeholder="8文字以上推奨"
                 />
               </label>

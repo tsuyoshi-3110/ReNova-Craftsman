@@ -45,6 +45,17 @@ function normalizePhoneForSave(input: string): string {
   return digits;
 }
 
+const WORK_TYPE_OPTIONS = [
+  "足場",
+  "下地補修",
+  "シーリング",
+  "塗装",
+  "防水",
+  "長尺シート",
+  "美装",
+  "その他",
+] as const;
+
 export default function RegisterClient() {
   const router = useRouter();
 
@@ -55,7 +66,7 @@ export default function RegisterClient() {
   const [phone, setPhone] = useState("");
 
   const [company, setCompany] = useState("");
-  const [workType, setWorkType] = useState("");
+  const [selectedWorkTypes, setSelectedWorkTypes] = useState<string[]>([]);
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -78,9 +89,9 @@ export default function RegisterClient() {
       p.length >= 10 &&
       p.length <= 11 &&
       !!toNonEmptyString(company) &&
-      !!toNonEmptyString(workType)
+      selectedWorkTypes.length > 0
     );
-  }, [name, address, phone, company, workType]);
+  }, [name, address, phone, company, selectedWorkTypes]);
 
   const canCreateAuth = useMemo(() => {
     return (
@@ -128,7 +139,7 @@ export default function RegisterClient() {
     const p = normalizePhoneForSave(phone);
 
     const c = toNonEmptyString(company);
-    const w = toNonEmptyString(workType);
+    const w = selectedWorkTypes.join(" / ");
 
     if (!n || !a || p.length < 10 || p.length > 11 || !c || !w) {
       throw new Error("PROFILE_INCOMPLETE");
@@ -306,14 +317,39 @@ export default function RegisterClient() {
             </Field>
 
             <Field label="工種">
-              <input
-                className="w-full rounded-xl border px-3 py-2 dark:bg-gray-950 dark:text-gray-100 dark:border-gray-800"
-                style={{ fontSize: 16 }}
-                value={workType}
-                onChange={(ev) => setWorkType(ev.target.value)}
-                disabled={busy}
-                placeholder="例）防水 / シーリング / 下地補修..."
-              />
+              <div className="flex flex-wrap gap-2">
+                {WORK_TYPE_OPTIONS.map((nm) => {
+                  const selected = selectedWorkTypes.includes(nm);
+                  return (
+                    <button
+                      key={nm}
+                      type="button"
+                      disabled={busy}
+                      onClick={() =>
+                        setSelectedWorkTypes((prev) =>
+                          prev.includes(nm)
+                            ? prev.filter((v) => v !== nm)
+                            : [...prev, nm],
+                        )
+                      }
+                      className={
+                        selected
+                          ? "rounded-xl border border-blue-600 bg-blue-600 px-3 py-2 text-sm font-extrabold text-white disabled:opacity-60"
+                          : "rounded-xl border bg-white px-3 py-2 text-sm font-extrabold text-gray-900 hover:bg-gray-50 disabled:opacity-60 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-100 dark:hover:bg-gray-900"
+                      }
+                    >
+                      {nm}
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="mt-1 text-xs font-bold text-gray-500 dark:text-gray-400">
+                ※ 複数選択できます（選択中:{" "}
+                {selectedWorkTypes.length > 0
+                  ? selectedWorkTypes.join(" / ")
+                  : "-"}
+                ）
+              </div>
             </Field>
 
             {/* ✅ 未ログイン時だけ表示 */}

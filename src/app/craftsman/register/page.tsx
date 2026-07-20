@@ -240,10 +240,10 @@ export default function CraftsmanRegisterPage() {
           <div className="flex items-start justify-between gap-3">
             <div>
               <div className="text-lg font-extrabold text-gray-900 dark:text-gray-100">
-                職人プロフィール登録
+                作業員プロフィール登録
               </div>
               <div className="mt-1 text-xs font-bold text-gray-500 dark:text-gray-400">
-                proclinkのアカウントをお持ちの方は、ここで職人情報を登録してください
+                proclinkのアカウントをお持ちの方は、ここで作業員情報を登録してください
               </div>
             </div>
           </div>

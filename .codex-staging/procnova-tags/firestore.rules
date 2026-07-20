@@ -1,0 +1,1144 @@
+rules_version = '2';
+
+// =============================================================
+// 共有 Firestore Rules — Firebase プロジェクト: proclink-8d582
+//
+// このファイルは proclink8.0 と renova18.5 が共用する唯一のルールです。
+// 変更時は必ず両アプリへの影響を確認してからデプロイしてください。
+//
+//   [SHARED]   両アプリが使用
+//   [PROCLINK] proclink8.0 のみ使用
+//   [RENOVA]   renova18.5  のみ使用
+//
+// ✅ 正本: renova project/renova18.5/firestore.rules
+//
+// デプロイ手順:
+//   1. このファイル (renova project/renova18.5/firestore.rules) を編集
+//   2. cp firestore.rules "../../proclink8.0/firestore.rules"  ← proclink 側へ反映
+//   3. firebase deploy --only firestore:rules
+// =============================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // -------------------------------------------------------
+    // 共通ヘルパー関数 [SHARED]
+    // -------------------------------------------------------
+
+    function isLogin() {
+      return request.auth != null;
+    }
+
+    // [PROCMANA] renova-adminで明示的に許可されたProcNovaメンバーだけが利用できる。
+    function hasProcManaAccess() {
+      return isLogin()
+        && exists(/databases/$(database)/documents/reNovaMember/$(request.auth.uid))
+        && get(/databases/$(database)/documents/reNovaMember/$(request.auth.uid)).data.procManaAccessEnabled == true;
+    }
+
+    function isOwner(projectId) {
+      return request.auth != null
+        && get(/databases/$(database)/documents/projects/$(projectId)).data.ownerUid
+          == request.auth.uid;
+    }
+
+    function isAdmin(projectId) {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/projects/$(projectId)/members/$(request.auth.uid))
+        && get(/databases/$(database)/documents/projects/$(projectId)/members/$(request.auth.uid)).data.role == "admin";
+    }
+
+    function isManager(projectId) {
+      return request.auth != null
+        && (isOwner(projectId) || isAdmin(projectId));
+    }
+
+    function isProjectMember(projectId) {
+      return request.auth != null
+        && (
+          isManager(projectId)
+          || exists(/databases/$(database)/documents/projects/$(projectId)/members/$(request.auth.uid))
+        );
+    }
+
+    function isPhotoPublic(projectId) {
+      return exists(/databases/$(database)/documents/projects/$(projectId)/public/config)
+        && get(/databases/$(database)/documents/projects/$(projectId)/public/config).data.photoPublic == true;
+    }
+
+    function isProjectOwnerUid(uid, projectId) {
+      return exists(/databases/$(database)/documents/projects/$(projectId))
+        && get(/databases/$(database)/documents/projects/$(projectId)).data.ownerUid == uid;
+    }
+
+    // [PROCMANA] 経営管理権限。現場権限とは分離し、工事ownerは常に全権限を持つ。
+    function isManaOwner(projectId) {
+      return hasProcManaAccess()
+        && exists(/databases/$(database)/documents/procmanaProjects/$(projectId))
+        && get(/databases/$(database)/documents/procmanaProjects/$(projectId)).data.ownerUid == request.auth.uid;
+    }
+
+    function isManaOwnerAfter(projectId) {
+      return hasProcManaAccess()
+        && getAfter(/databases/$(database)/documents/procmanaProjects/$(projectId)).data.ownerUid == request.auth.uid;
+    }
+
+    function manaRole(projectId) {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)/procManaProjects/$(projectId)).data.managementRole;
+    }
+
+    function hasManaRole(projectId, role) {
+      return hasProcManaAccess()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid)/procManaProjects/$(projectId))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)/procManaProjects/$(projectId)).data.active == true
+        && manaRole(projectId) == role;
+    }
+
+    function isManaAdmin(projectId) {
+      return isManaOwner(projectId) || hasManaRole(projectId, "admin");
+    }
+
+    function isManaFinance(projectId) {
+      return isManaAdmin(projectId) || hasManaRole(projectId, "accounting");
+    }
+
+    function validManaInvite(projectId, role, code) {
+      return hasProcManaAccess()
+        && code is string
+        && exists(/databases/$(database)/documents/procManaInviteCodes/$(code))
+        && get(/databases/$(database)/documents/procManaInviteCodes/$(code)).data.projectId == projectId
+        && get(/databases/$(database)/documents/procManaInviteCodes/$(code)).data.managementRole == role
+        && get(/databases/$(database)/documents/procManaInviteCodes/$(code)).data.active == true
+        && get(/databases/$(database)/documents/procManaInviteCodes/$(code)).data.expiresAt > request.time
+        && getAfter(/databases/$(database)/documents/procManaInviteCodes/$(code)).data.usedBy == request.auth.uid
+        && getAfter(/databases/$(database)/documents/procManaInviteCodes/$(code)).data.active == false;
+    }
+
+    // [RENOVA] renovaGroups のメンバー判定
+    function isRenovaGroupMember(groupId) {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/renovaGroups/$(groupId)/members/$(request.auth.uid));
+    }
+
+    function isRenovaGroupAdmin(groupId) {
+      return request.auth != null
+        && get(/databases/$(database)/documents/renovaGroups/$(groupId)/members/$(request.auth.uid)).data.role == "admin";
+    }
+
+    // [ADMIN] renova-admin の管理者判定（admin/{uid} ドキュメントの有無）
+    function isSystemAdmin() {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/admin/$(request.auth.uid));
+    }
+
+    // -------------------------------------------------------
+    // shareCodes [SHARED]
+    // -------------------------------------------------------
+    match /shareCodes/{code} {
+      allow read: if true;
+      allow write: if isLogin();
+    }
+
+    // -------------------------------------------------------
+    // projects [SHARED]
+    // -------------------------------------------------------
+    match /projects/{projectId} {
+      allow read: if isLogin();
+
+      allow create: if isLogin()
+        && request.resource.data.ownerUid == request.auth.uid;
+
+      allow update: if isOwner(projectId)
+        && request.resource.data.ownerUid == resource.data.ownerUid;
+
+      allow delete: if isOwner(projectId);
+    }
+
+    match /projects/{projectId}/public/config {
+      allow read: if true;
+      allow create, update, delete: if isManager(projectId);
+    }
+
+    // [SHARED] boardPdfs — proclink: PDF出力保存 / renova: 黒板PDF保存
+    match /projects/{projectId}/boardPdfs/{docId} {
+      allow read: if true;
+      allow write: if isLogin();
+    }
+
+    // [SHARED] laundry / laundryStatus
+    match /projects/{projectId}/laundry/{docId} {
+      allow read: if true;
+      allow write: if isLogin();
+    }
+
+    match /projects/{projectId}/laundryStatus/{docId} {
+      allow read: if true;
+      allow write: if isLogin();
+    }
+
+    // [SHARED] members
+    match /projects/{projectId}/members/{uid} {
+      // 自分のメンバードキュメントは参加前の確認（joinByShareCode）でも読む必要があるため
+      // 自分自身のドキュメントに限り常に read 可
+      allow read: if isProjectMember(projectId)
+        || (request.auth != null && request.auth.uid == uid);
+      allow create: if isLogin() && request.auth.uid == uid;
+      allow update: if isOwner(projectId)
+        || (isLogin() && request.auth.uid == uid
+            && request.resource.data.uid == resource.data.uid
+            && request.resource.data.role == resource.data.role);
+      allow delete: if isOwner(projectId) || (isLogin() && request.auth.uid == uid);
+    }
+
+    // -------------------------------------------------------
+    // users [SHARED]
+    // -------------------------------------------------------
+    match /users/{uid} {
+      // read: 写真撮影者名の解決（proclink usePhotoUsers）等で
+      //       他ユーザーの基本プロフィールを参照するため全ログインユーザー可
+      allow read: if isLogin();
+      allow write: if isLogin() && request.auth.uid == uid;
+    }
+
+    match /users/{uid}/myProjects/{projectId} {
+      allow read, write: if isLogin() && request.auth.uid == uid;
+      // プロジェクトのownerはメンバーのmyProjectsを更新・削除できる（除名・ブロック用）
+      allow update, delete: if isOwner(projectId);
+    }
+
+    // [RENOVA] users 直下テンプレート
+    match /users/{uid}/stepTemplates/{templateId} {
+      allow read, write: if isLogin() && request.auth.uid == uid;
+    }
+
+    match /users/{uid}/overallTemplates/{templateId} {
+      allow read, write: if isLogin() && request.auth.uid == uid;
+    }
+
+    // [SHARED] Web Push 購読情報（本人のみ）。サーバー送信は Admin SDK 経由でルール非対象
+    match /users/{uid}/pushSubscriptions/{subId} {
+      allow read, write: if isLogin() && request.auth.uid == uid;
+    }
+
+    // [PROCLINK] 通知種別のオン/オフ設定（本人のみ）
+    match /users/{uid}/pushSettings/{docId} {
+      allow read, write: if isLogin() && request.auth.uid == uid;
+    }
+
+    // [PROCLINK] グループ作業日報：非表示メンバー設定（本人のみ）
+    match /users/{uid}/groupReportMutes/{groupId} {
+      allow read, write: if isLogin() && request.auth.uid == uid;
+    }
+
+    // [SHARED] 旧 users/{uid}/projects ツリー（互換用）
+    match /users/{uid}/projects/{projectId} {
+      allow read, write: if isLogin() && request.auth.uid == uid;
+    }
+
+    match /users/{uid}/projects/{projectId}/{document=**} {
+      allow read: if isLogin()
+        && (
+          request.auth.uid == uid
+          || (isProjectOwnerUid(uid, projectId) && isProjectMember(projectId))
+        );
+
+      allow write: if isLogin()
+        && (
+          request.auth.uid == uid
+          || (isProjectOwnerUid(uid, projectId) && isManager(projectId))
+        );
+    }
+
+    // [SHARED] residentNoticeTemplates
+    match /users/{uid}/residentNoticeTemplates/{docId} {
+      allow read: if isLogin() && request.auth.uid == uid;
+
+      allow create, update: if isLogin()
+        && request.auth.uid == uid
+        && request.resource.data.title is string
+        && request.resource.data.text is string
+        && request.resource.data.createdBy == uid;
+
+      allow delete: if isLogin() && request.auth.uid == uid;
+    }
+
+    match /users/{uid}/residentNoticeTemplateOverrides/{templateId} {
+      allow read: if isLogin() && request.auth.uid == uid;
+
+      allow create, update: if isLogin()
+        && request.auth.uid == uid
+        && request.resource.data.createdBy == uid
+        && (!("title" in request.resource.data) || request.resource.data.title is string)
+        && (!("greeting" in request.resource.data) || request.resource.data.greeting is string)
+        && (!("body" in request.resource.data) || request.resource.data.body is string)
+        && (!("periodNote" in request.resource.data) || request.resource.data.periodNote is string)
+        && (!("workItems" in request.resource.data) || request.resource.data.workItems is list)
+        && (!("cautions" in request.resource.data) || request.resource.data.cautions is list)
+        && (!("note" in request.resource.data) || request.resource.data.note is string);
+
+      allow delete: if isLogin() && request.auth.uid == uid;
+    }
+
+    // -------------------------------------------------------
+    // proclinkMember / reNovaMember [SHARED]
+    // -------------------------------------------------------
+    match /proclinkMember/{memberId} {
+      // read: プロジェクトメンバー一覧等で他ユーザーのプロフィール名を
+      //       解決するため全ログインユーザー可（両アプリで使用）
+      allow read: if isLogin();
+
+      allow create: if isLogin()
+        && (
+          request.auth.uid == memberId
+          || request.resource.data.uid == request.auth.uid
+        );
+
+      allow update: if isLogin()
+        && (
+          request.auth.uid == memberId
+          || resource.data.uid == request.auth.uid
+          || request.resource.data.uid == request.auth.uid
+        );
+
+      allow delete: if false;
+    }
+
+    match /proclinkMember/{uid}/residentNoticeTemplates/{docId} {
+      allow read, write: if isLogin() && request.auth.uid == uid;
+    }
+
+    match /proclinkMember/{uid}/residentNoticeTemplateOverrides/{templateId} {
+      allow read, write: if isLogin() && request.auth.uid == uid;
+    }
+
+    match /reNovaMember/{memberId} {
+      // read: 管理者一覧・チャット表示名等で他ユーザーのプロフィールを
+      //       解決するため全ログインユーザー可（両アプリで使用）
+      allow read: if isLogin();
+
+      allow create: if isLogin()
+        && (
+          request.auth.uid == memberId
+          || request.resource.data.uid == request.auth.uid
+        );
+
+      allow update: if isLogin()
+        && (
+          request.auth.uid == memberId
+          || resource.data.uid == request.auth.uid
+          || request.resource.data.uid == request.auth.uid
+        )
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+          "procManaAccessEnabled",
+          "procManaAccessUpdatedAt",
+          "procManaAccessUpdatedBy"
+        ]);
+
+      allow delete: if false;
+    }
+
+    // [PROCLINK] craftsmen — 作業員プロフィール
+    // ログイン画面・メンバー一覧で他ユーザーの名前解決に使用
+    // （旧キャッチオール read: isLogin() に依存していたため明示化）
+    match /craftsmen/{uid} {
+      allow read: if isLogin();
+      allow create, update: if isLogin() && request.auth.uid == uid;
+      allow delete: if false;
+    }
+
+    match /reNovaMember/{uid}/residentNoticeTemplates/{docId} {
+      allow read, write: if isLogin() && request.auth.uid == uid;
+    }
+
+    match /reNovaMember/{uid}/residentNoticeTemplateOverrides/{templateId} {
+      allow read, write: if isLogin() && request.auth.uid == uid;
+    }
+
+    // [SHARED] 会社名の登録（/account/companies・PDF出力時の会社選択Picker）
+    // 2026-07-05 のクリーンアップで誤って削除され権限エラーになったため復元。
+    match /reNovaMember/{uid}/companies/{companyId} {
+      allow read, write: if isLogin() && request.auth.uid == uid;
+    }
+
+    // -------------------------------------------------------
+    // Photos [SHARED] — 写真撮影・閲覧
+    // 変更時は proclink カメラ画面・renova 黒板機能の両方を確認
+    // -------------------------------------------------------
+    match /projects/{projectId}/subtitles/{subtitleId}/workTypes/{workTypeId}/photos/{photoId} {
+      allow read: if isProjectMember(projectId) || isPhotoPublic(projectId)
+        || (isLogin()
+            && exists(/databases/$(database)/documents/craftsmen/$(request.auth.uid))
+            && exists(/databases/$(database)/documents/projects/$(projectId)/locationPhotoDocumentsConfig/share)
+            && get(/databases/$(database)/documents/projects/$(projectId)/locationPhotoDocumentsConfig/share).data.shared == true);
+
+      // ✅ クライアント時刻比較・厳密フィールド検証を排除してシンプル化
+      //    (shotAt <= request.time はデバイス時刻ズレで失敗するため削除)
+      allow create: if isProjectMember(projectId)
+        && request.auth != null
+        && request.resource.data.shotByUid == request.auth.uid
+        && request.resource.data.projectId == projectId;
+
+      // ✅ 工程設定に合わせて stepId/sectionId のみ変更可
+      allow update: if isManager(projectId)
+        && request.resource.data.diff(resource.data).changedKeys().hasOnly(["stepId", "sectionId"])
+        && request.resource.data.projectId == resource.data.projectId
+        && request.resource.data.subtitleId == resource.data.subtitleId
+        && request.resource.data.workTypeId == resource.data.workTypeId
+        && request.resource.data.shotByUid == resource.data.shotByUid;
+
+      allow delete: if isProjectMember(projectId)
+        && (
+          isManager(projectId)
+          || request.auth.uid == resource.data.shotByUid
+        );
+    }
+
+    // [SHARED] collectionGroup("photos") クエリ用（craftsman チャットの写真選択など）
+    // コレクショングループクエリは /{path=**} 形式のルールがないと必ず拒否される。
+    // 判定は create ルールが保証する resource.data.projectId を使う。read 専用で、
+    // 書き込みは上の明示パスルールのみに残す。
+    match /{path=**}/photos/{photoId} {
+      allow read: if isProjectMember(resource.data.projectId)
+        || isPhotoPublic(resource.data.projectId)
+        || (isLogin()
+            && exists(/databases/$(database)/documents/craftsmen/$(request.auth.uid))
+            && exists(/databases/$(database)/documents/projects/$(resource.data.projectId)/locationPhotoDocumentsConfig/share)
+            && get(/databases/$(database)/documents/projects/$(resource.data.projectId)/locationPhotoDocumentsConfig/share).data.shared == true);
+    }
+
+    // [SHARED] photoExportJobs
+    match /photoExportJobs/{jobId} {
+      allow read, write: if request.auth != null;
+    }
+
+    // -------------------------------------------------------
+    // subtitles / workTypes / steps [PROCLINK]
+    // renova では使用しないが Firebase は共通のため共存
+    // -------------------------------------------------------
+    match /projects/{projectId}/subtitles/{subtitleId} {
+      allow read: if isProjectMember(projectId) || isPhotoPublic(projectId)
+        || (isLogin()
+            && exists(/databases/$(database)/documents/craftsmen/$(request.auth.uid))
+            && exists(/databases/$(database)/documents/projects/$(projectId)/locationPhotoDocumentsConfig/share)
+            && get(/databases/$(database)/documents/projects/$(projectId)/locationPhotoDocumentsConfig/share).data.shared == true);
+      allow create, update, delete: if isManager(projectId);
+    }
+
+    match /projects/{projectId}/subtitles/{subtitleId}/workTypes/{workTypeId} {
+      allow read: if isProjectMember(projectId) || isPhotoPublic(projectId)
+        || (isLogin()
+            && exists(/databases/$(database)/documents/craftsmen/$(request.auth.uid))
+            && exists(/databases/$(database)/documents/projects/$(projectId)/locationPhotoDocumentsConfig/share)
+            && get(/databases/$(database)/documents/projects/$(projectId)/locationPhotoDocumentsConfig/share).data.shared == true);
+      allow create, update, delete: if isManager(projectId);
+    }
+
+    match /projects/{projectId}/subtitles/{subtitleId}/workTypeSections/{sectionId} {
+      allow read: if isProjectMember(projectId) || isPhotoPublic(projectId);
+      allow create, update, delete: if isManager(projectId);
+    }
+
+    match /projects/{projectId}/subtitles/{subtitleId}/workTypes/{workTypeId}/steps/{stepId} {
+      allow read: if isProjectMember(projectId);
+      allow create, update, delete: if isManager(projectId);
+    }
+
+    match /projects/{projectId}/subtitles/{subtitleId}/workTypes/{workTypeId}/stepSections/{sectionId} {
+      allow read: if isProjectMember(projectId);
+      allow create, update, delete: if isManager(projectId);
+    }
+
+    // [PROCLINK] 工程スケジュール
+    // shared=true かつ craftsmen 登録済みユーザーは proclink/renova に影響しない範囲で閲覧可
+    match /projects/{projectId}/scheduleData/{docId} {
+      allow read: if isProjectMember(projectId)
+        || (isLogin()
+            && resource.data.shared == true
+            && exists(/databases/$(database)/documents/craftsmen/$(request.auth.uid)));
+      allow create, update, delete: if isManager(projectId);
+    }
+
+    // [SHARED] ProcManaから共有される実行予算の明細書（金入り/金抜き）
+    // 現場管理者（owner/admin）のみ閲覧・更新可。職人・一般メンバーには公開しない
+    match /projects/{projectId}/sharedBudget/{docId} {
+      allow read: if isManager(projectId);
+      allow create, update, delete: if isManager(projectId);
+    }
+
+    // [PROCLINK] カレンダースケジュール
+    match /projects/{projectId}/calendarEvents/{eventId} {
+      allow read: if isProjectMember(projectId);
+      allow create: if isProjectMember(projectId)
+        && request.resource.data.createdBy == request.auth.uid;
+
+      allow update: if isManager(projectId)
+        || (
+          isProjectMember(projectId)
+          && resource.data.createdBy == request.auth.uid
+          && request.resource.data.createdBy == resource.data.createdBy
+        );
+
+      allow delete: if isManager(projectId)
+        || (
+          isProjectMember(projectId)
+          && resource.data.createdBy == request.auth.uid
+        );
+    }
+
+    // -------------------------------------------------------
+    // Excel / AI 機能 [RENOVA]
+    // proclink では使用しない
+    // -------------------------------------------------------
+    match /projects/{projectId}/excelImports/{document=**} {
+      allow read: if isProjectMember(projectId);
+      allow write: if isProjectMember(projectId);
+    }
+
+    match /projects/{projectId}/materialCalcs/{calcId} {
+      allow read: if isProjectMember(projectId);
+      allow write: if isProjectMember(projectId);
+    }
+
+    match /projects/{projectId}/aiDictionaries/{document=**} {
+      allow read: if isProjectMember(projectId);
+      allow write: if isProjectMember(projectId);
+    }
+
+    match /projects/{projectId}/excelSumsSaved/{sumId} {
+      allow read: if isProjectMember(projectId);
+      allow write: if isProjectMember(projectId);
+    }
+
+    match /projects/{projectId}/excelSumDraft/{uid} {
+      allow read, write: if isProjectMember(projectId) && request.auth.uid == uid;
+    }
+
+    match /projects/{projectId}/excelSumDraft/{uid}/rowChunks/{chunkId} {
+      allow read, write: if isProjectMember(projectId) && request.auth.uid == uid;
+    }
+
+    // [RENOVA/PROCMANA] 工事関係書類保管庫
+    // ProcMana連携工事は経営管理権限でも同じ保管庫を直接参照・追加できる。
+    // 移動・削除は従来どおりProcNovaのowner/adminだけに限定する。
+    match /projects/{projectId}/documents/{docId} {
+      allow read: if isProjectMember(projectId) || isManaFinance(projectId);
+      allow create: if (isManager(projectId) || isManaFinance(projectId))
+        && request.auth != null
+        && request.resource.data.uploadedBy == request.auth.uid;
+      // フォルダ移動と検索用タグだけを更新可能にする。他フィールドの更新は禁止。
+      allow update: if isManager(projectId)
+        && request.resource.data.diff(resource.data).changedKeys().hasOnly(["folderId", "tags"])
+        && (!request.resource.data.diff(resource.data).changedKeys().hasAny(["tags"])
+          || (request.resource.data.tags is list
+            && request.resource.data.tags.size() <= 12));
+      allow delete: if isManager(projectId);
+    }
+
+    // [RENOVA] 工事関係書類保管庫 — コメント（トップコメント＋返信）
+    match /projects/{projectId}/documents/{docId}/comments/{commentId} {
+      allow read: if isProjectMember(projectId);
+
+      allow create: if isProjectMember(projectId)
+        && request.auth != null
+        && request.resource.data.authorUid == request.auth.uid
+        && request.resource.data.authorName is string
+        && request.resource.data.text is string
+        && (
+          request.resource.data.parentId == null
+          || request.resource.data.parentId is string
+        );
+
+      allow update: if false;
+
+      // 管理者（owner/admin）または投稿者本人
+      allow delete: if isManager(projectId)
+        || (isLogin() && request.auth.uid == resource.data.authorUid);
+    }
+
+    // [RENOVA] 工事関係書類保管庫 — 既読状態（本人のみ）
+    match /projects/{projectId}/documents/{docId}/readStates/{uid} {
+      allow read: if isProjectMember(projectId) && request.auth.uid == uid;
+      allow create, update: if isProjectMember(projectId)
+        && request.auth != null
+        && request.auth.uid == uid;
+      allow delete: if false;
+    }
+
+    // [RENOVA] 工事関係書類保管庫 — 並び替え順序（owner/admin のみ書き込み）
+    match /projects/{projectId}/documentsConfig/{docId} {
+      allow read: if isProjectMember(projectId);
+      allow write: if isManager(projectId);
+    }
+
+    // [PROCLINK] 作業日報（工事ごと・現場で共有）
+    // 閲覧は工事メンバー、作成・編集・削除は owner/admin のみ
+    match /projects/{projectId}/dailyReports/{reportId} {
+      allow read: if isProjectMember(projectId);
+      allow create: if isManager(projectId)
+        && request.resource.data.authorUid == request.auth.uid;
+      allow update, delete: if isManager(projectId);
+    }
+
+    // [RENOVA] 工事関係書類保管庫 — フォルダ
+    // member ロールとProcMana経営権限は閲覧可能。ProcManaからの新規作成も許可する。
+    // リネーム・削除は従来どおりProcNova owner/admin のみに限定する。
+    match /projects/{projectId}/documentsFolders/{folderId} {
+      allow read: if isProjectMember(projectId) || isManaFinance(projectId);
+      allow create: if (isManager(projectId) || isManaFinance(projectId))
+        && request.auth != null
+        && request.resource.data.createdBy == request.auth.uid;
+      allow update, delete: if isManager(projectId);
+    }
+
+    // [RENOVA] 箇所写真管理 — 共有設定（craftsmenも共有ONのドキュメントを読める）
+    match /projects/{projectId}/locationPhotoDocumentsConfig/{docId} {
+      allow read: if isProjectMember(projectId)
+        || (isLogin()
+            && exists(/databases/$(database)/documents/craftsmen/$(request.auth.uid)));
+      allow write: if isManager(projectId);
+    }
+
+    // [RENOVA] 箇所写真管理 — 図面・画像ドキュメント
+    match /projects/{projectId}/locationPhotoDocuments/{docId} {
+      allow read: if isProjectMember(projectId)
+        || (isLogin()
+            && exists(/databases/$(database)/documents/craftsmen/$(request.auth.uid))
+            && exists(/databases/$(database)/documents/projects/$(projectId)/locationPhotoDocumentsConfig/share)
+            && get(/databases/$(database)/documents/projects/$(projectId)/locationPhotoDocumentsConfig/share).data.shared == true);
+      allow create: if isProjectMember(projectId)
+        && request.auth != null
+        && request.resource.data.uploadedByUid == request.auth.uid;
+      allow update: if false;
+      allow delete: if isManager(projectId)
+        || (isLogin() && request.auth.uid == resource.data.uploadedByUid);
+    }
+
+    // [RENOVA] 箇所写真管理 — ピン
+    match /projects/{projectId}/locationPhotoDocuments/{docId}/pins/{pinId} {
+      allow read: if isProjectMember(projectId)
+        || (isLogin()
+            && exists(/databases/$(database)/documents/craftsmen/$(request.auth.uid))
+            && exists(/databases/$(database)/documents/projects/$(projectId)/locationPhotoDocumentsConfig/share)
+            && get(/databases/$(database)/documents/projects/$(projectId)/locationPhotoDocumentsConfig/share).data.shared == true);
+      allow create: if (isProjectMember(projectId)
+          && request.auth != null
+          && request.resource.data.createdByUid == request.auth.uid)
+        || (isLogin()
+          && exists(/databases/$(database)/documents/craftsmen/$(request.auth.uid))
+          && exists(/databases/$(database)/documents/projects/$(projectId)/locationPhotoDocumentsConfig/share)
+          && get(/databases/$(database)/documents/projects/$(projectId)/locationPhotoDocumentsConfig/share).data.shared == true
+          && request.resource.data.createdByUid == request.auth.uid);
+      allow update: if isManager(projectId)
+        || (isLogin() && request.auth.uid == resource.data.createdByUid);
+      allow delete: if isManager(projectId)
+        || (isLogin() && request.auth.uid == resource.data.createdByUid);
+    }
+
+    match /projects/{projectId}/locationPhotoDocuments/{docId}/areas/{areaId} {
+      allow read: if isProjectMember(projectId)
+        || (isLogin()
+            && exists(/databases/$(database)/documents/craftsmen/$(request.auth.uid))
+            && exists(/databases/$(database)/documents/projects/$(projectId)/locationPhotoDocumentsConfig/share)
+            && get(/databases/$(database)/documents/projects/$(projectId)/locationPhotoDocumentsConfig/share).data.shared == true);
+      allow create: if (isProjectMember(projectId)
+          && request.auth != null
+          && request.resource.data.createdByUid == request.auth.uid)
+        || (isLogin()
+          && exists(/databases/$(database)/documents/craftsmen/$(request.auth.uid))
+          && exists(/databases/$(database)/documents/projects/$(projectId)/locationPhotoDocumentsConfig/share)
+          && get(/databases/$(database)/documents/projects/$(projectId)/locationPhotoDocumentsConfig/share).data.shared == true
+          && request.resource.data.createdByUid == request.auth.uid);
+      allow update: if isManager(projectId)
+        || (isLogin() && request.auth.uid == resource.data.createdByUid);
+      allow delete: if isManager(projectId)
+        || (isLogin() && request.auth.uid == resource.data.createdByUid);
+    }
+
+    // -------------------------------------------------------
+    // DM / チャット / 居住者通知 [RENOVA]
+    // proclink では使用しない
+    // -------------------------------------------------------
+    match /projects/{projectId}/dmRooms/{roomId}/messages/{messageId} {
+      allow read: if isProjectMember(projectId);
+
+      allow create: if isProjectMember(projectId)
+        && request.auth != null
+        && request.resource.data.senderUid == request.auth.uid
+        && request.resource.data.toUid is string
+        && exists(/databases/$(database)/documents/projects/$(projectId)/members/$(request.resource.data.toUid))
+        && request.resource.data.readBy is list
+        && request.resource.data.readBy.hasAll([request.auth.uid]);
+
+      allow update: if isProjectMember(projectId)
+        && request.auth != null
+        && request.resource.data.diff(resource.data).changedKeys().hasOnly(["readBy"])
+        && request.resource.data.readBy is list
+        && request.resource.data.readBy.hasAll(resource.data.readBy)
+        && request.resource.data.readBy.hasAll([request.auth.uid]);
+
+      allow delete: if false;
+    }
+
+    match /projects/{projectId}/chatRooms/{roomId} {
+      allow read: if isProjectMember(projectId);
+      allow create, update: if isProjectMember(projectId);
+      allow delete: if false;
+    }
+
+    match /projects/{projectId}/chatRooms/{roomId}/messages/{messageId} {
+      allow read: if isProjectMember(projectId);
+
+      allow create: if isProjectMember(projectId)
+        && request.auth != null
+        && request.resource.data.senderUid == request.auth.uid;
+
+      allow update: if isProjectMember(projectId)
+        && request.auth != null
+        && resource.data.senderUid == request.auth.uid
+        && request.resource.data.senderUid == resource.data.senderUid
+        && request.resource.data.senderName == resource.data.senderName
+        && request.resource.data.senderRole == resource.data.senderRole
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.text == resource.data.text
+        && request.resource.data.diff(resource.data).changedKeys().hasOnly([
+          "fileUrl",
+          "fileName",
+          "fileType",
+          "fileSize",
+        ]);
+
+      allow delete: if false;
+    }
+
+    match /projects/{projectId}/chatRooms/{roomId}/readStates/{uid} {
+      // craftsmen 登録済みユーザーは自分の既読状態を参照可（メニューの未読バッジ用）
+      allow read: if isProjectMember(projectId)
+        || (isLogin()
+            && request.auth.uid == uid
+            && exists(/databases/$(database)/documents/craftsmen/$(request.auth.uid)));
+
+      allow create, update: if isProjectMember(projectId)
+        && request.auth != null
+        && request.auth.uid == uid
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.projectId == projectId;
+
+      allow delete: if false;
+    }
+
+    match /projects/{projectId}/residentMessages/{messageId} {
+      allow read: if isProjectMember(projectId);
+
+      allow create: if isManager(projectId);
+
+      allow update: if (
+          isManager(projectId)
+          && request.resource.data.diff(resource.data).changedKeys().hasOnly([
+            "text",
+            "updatedAt",
+            "targetScope",
+            "targetGroupTitle",
+            "templateId",
+            "templateTitle",
+          ])
+        )
+        || (
+          isProjectMember(projectId)
+          && request.auth != null
+          && request.resource.data.diff(resource.data).changedKeys().hasOnly(["readBy"])
+        );
+
+      allow delete: if isManager(projectId);
+    }
+
+    match /residentMembers/{uid} {
+      allow read: if request.auth != null
+        && (
+          request.auth.uid == uid
+          || (
+            resource.data.projectId is string
+            && isProjectMember(resource.data.projectId)
+          )
+        );
+
+      allow create: if request.auth != null
+        && (
+          request.auth.uid == uid
+          || (
+            request.resource.data.projectId is string
+            && isManager(request.resource.data.projectId)
+          )
+        );
+
+      allow update: if request.auth != null
+        && (
+          request.auth.uid == uid
+          || (
+            request.resource.data.projectId is string
+            && isManager(request.resource.data.projectId)
+          )
+        );
+
+      allow delete: if request.auth != null
+        && (
+          request.auth.uid == uid
+          || (
+            resource.data.projectId is string
+            && isManager(resource.data.projectId)
+          )
+        );
+    }
+
+    // -------------------------------------------------------
+    // userTemplates [SHARED]
+    // -------------------------------------------------------
+    match /userTemplates/{userId}/stepTemplates/{templateId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    match /userTemplates/{userId}/overallTemplates/{templateId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // [SHARED] 居住者向けお知らせテンプレート（新配置）
+    match /userTemplates/{userId}/residentNoticeTemplates/{docId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    match /userTemplates/{userId}/residentNoticeTemplateOverrides/{templateId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // -------------------------------------------------------
+    // renovaGroups [RENOVA]
+    // proclink では使用しない
+    // -------------------------------------------------------
+    match /renovaGroups/{groupId} {
+      allow read: if isLogin();
+      allow create, update, delete: if false;
+    }
+
+    match /renovaGroups/{groupId}/members/{uid} {
+      allow read: if isLogin();
+      allow create, update, delete: if false;
+    }
+
+    // [PROCLINK] 作業日報（グループ共有）
+    match /renovaGroups/{groupId}/dailyReports/{reportId} {
+      allow read: if isRenovaGroupMember(groupId);
+      allow create: if isRenovaGroupMember(groupId)
+        && request.auth != null
+        && request.resource.data.authorUid == request.auth.uid;
+      // 更新・削除は作成者本人のみ
+      allow update, delete: if isLogin()
+        && request.auth.uid == resource.data.authorUid;
+    }
+
+    // [PROCLINK] 出退勤（業務開始/終了の打刻・現在地/時刻）
+    // 閲覧はグループメンバー、書き込みは本人の記録のみ
+    match /renovaGroups/{groupId}/attendance/{docId} {
+      allow read: if isRenovaGroupMember(groupId);
+      allow create: if isRenovaGroupMember(groupId)
+        && request.resource.data.uid == request.auth.uid;
+      allow update: if isRenovaGroupMember(groupId)
+        && resource.data.uid == request.auth.uid
+        && request.resource.data.uid == request.auth.uid;
+      allow delete: if isLogin() && resource.data.uid == request.auth.uid;
+    }
+
+    // [PROCLINK] 打刻・日報の修正依頼（メンバー → グループ管理者）
+    // 作成は本人のみ（status は pending 固定）。
+    // 承認・却下はサーバーAPI（Admin SDK）経由で行うためクライアントの update は禁止。
+    // 閲覧はグループ管理者、または本人（requesterUid で絞ったクエリのみ）。
+    match /renovaGroups/{groupId}/correctionRequests/{requestId} {
+      allow read: if isRenovaGroupAdmin(groupId)
+        || (isLogin() && resource.data.requesterUid == request.auth.uid);
+      allow create: if isRenovaGroupMember(groupId)
+        && request.resource.data.requesterUid == request.auth.uid
+        && request.resource.data.status == "pending";
+      allow update: if false;
+      // 取り下げは本人のみ（未処理のもの）
+      allow delete: if isLogin()
+        && resource.data.requesterUid == request.auth.uid
+        && resource.data.status == "pending";
+    }
+
+    match /renovaGroups/{groupId}/dmRooms/{roomKey}/messages/{messageId} {
+      allow read: if isRenovaGroupMember(groupId);
+
+      allow create: if isRenovaGroupMember(groupId)
+        && request.auth != null
+        && request.resource.data.senderUid == request.auth.uid
+        && request.resource.data.toUid is string
+        && exists(/databases/$(database)/documents/renovaGroups/$(groupId)/members/$(request.resource.data.toUid))
+        && request.resource.data.readBy is list
+        && request.resource.data.readBy.hasAll([request.auth.uid]);
+
+      allow update: if isRenovaGroupMember(groupId)
+        && request.auth != null
+        && request.resource.data.diff(resource.data).changedKeys().hasOnly(["readBy", "acceptedBy"])
+        && (!("readBy" in request.resource.data) || (
+          request.resource.data.readBy is list
+          && request.resource.data.readBy.hasAll(resource.data.readBy)
+          && request.resource.data.readBy.hasAll([request.auth.uid])
+        ))
+        && (!("acceptedBy" in request.resource.data) || (
+          request.resource.data.acceptedBy is list
+          && (!("acceptedBy" in resource.data) || request.resource.data.acceptedBy.hasAll(resource.data.acceptedBy))
+          && request.resource.data.acceptedBy.hasAll([request.auth.uid])
+        ));
+
+      allow delete: if false;
+    }
+
+    match /renovaGroups/{groupId}/groupChats/{roomKey}/messages/{messageId} {
+      allow read: if isRenovaGroupMember(groupId);
+
+      allow create: if isRenovaGroupMember(groupId)
+        && request.auth != null
+        && request.resource.data.senderUid == request.auth.uid
+        && request.resource.data.readBy is list
+        && request.resource.data.readBy.hasAll([request.auth.uid]);
+
+      allow update: if isRenovaGroupMember(groupId)
+        && request.auth != null
+        && request.resource.data.diff(resource.data).changedKeys().hasOnly(["readBy", "acceptedBy"])
+        && (!("readBy" in request.resource.data) || (
+          request.resource.data.readBy is list
+          && request.resource.data.readBy.hasAll(resource.data.readBy)
+          && request.resource.data.readBy.hasAll([request.auth.uid])
+        ))
+        && (!("acceptedBy" in request.resource.data) || (
+          request.resource.data.acceptedBy is list
+          && (!("acceptedBy" in resource.data) || request.resource.data.acceptedBy.hasAll(resource.data.acceptedBy))
+          && request.resource.data.acceptedBy.hasAll([request.auth.uid])
+        ));
+
+      allow delete: if false;
+    }
+
+    // -------------------------------------------------------
+    // 共通ユーティリティ [SHARED]
+    // -------------------------------------------------------
+    match /deviceBindings/{deviceId} {
+      allow read, write: if isLogin();
+    }
+
+    match /publicWorkTemplates/{templateId} {
+      allow read: if isLogin();
+      allow create, update, delete: if isLogin();
+    }
+
+    // [PROCLINK] 英語版公開テンプレート（lang === "en" 時に使用）
+    match /publicWorkTemplates-en/{templateId} {
+      allow read: if isLogin();
+      allow create, update, delete: if isLogin();
+    }
+
+    // [RENOVA] 解約申請 — 本人のみ作成・参照・取下げ可
+    match /cancelRequests/{requestId} {
+      allow read: if isLogin() && resource.data.uid == request.auth.uid;
+      allow create: if isLogin()
+        && request.resource.data.uid == request.auth.uid;
+      allow update: if false;
+      allow delete: if isLogin() && resource.data.uid == request.auth.uid;
+    }
+
+    match /proclinkWorkTypeCodes/{codeId} {
+      allow read: if isLogin();
+      allow create, update: if isLogin();
+      allow delete: if false;
+    }
+
+    // [ADMIN] 英語版工種コード（renova-admin の設定画面で使用）
+    match /proclinkWorkTypeCodes-en/{codeId} {
+      allow read: if isLogin();
+      allow create, update: if isLogin();
+      allow delete: if false;
+    }
+
+    match /admin/{uid} {
+      allow read: if request.auth != null && request.auth.uid == uid;
+      allow write: if false;
+    }
+
+    // [ADMIN/RENOVA] 紹介者
+    // read: 本人に加え、renova-admin の管理者は全件一覧（紹介者選択UI）で使用
+    match /referrers/{uid} {
+      allow read: if isSystemAdmin()
+        || (request.auth != null && request.auth.uid == uid);
+      allow create, update: if request.auth != null && request.auth.uid == uid;
+      allow delete: if false;
+    }
+
+    // [ADMIN] 紹介者の顧客一覧 — 書き込みはサーバー(Admin SDK)のみ
+    match /referrers/{uid}/customers/{customerId} {
+      allow read: if isSystemAdmin()
+        || (request.auth != null && request.auth.uid == uid);
+      allow write: if false;
+    }
+
+    // [ADMIN] 初期費用申請 — 管理者のみ閲覧、書き込みはサーバーのみ
+    match /renovaInitialFeeRequests/{requestId} {
+      allow read: if isSystemAdmin();
+      allow write: if false;
+    }
+
+    // [CRAFTSMAN] renovaMembers — renova-craftsman1.1 の chatProfile が参照
+    // （おそらく reNovaMember の誤記由来の legacy 参照。データは存在しない想定だが、
+    //   read を拒否すると getDoc が例外になりチャット表示名解決が壊れるため許可）
+    match /renovaMembers/{uid} {
+      allow read: if isLogin();
+      allow write: if false;
+    }
+
+    // -------------------------------------------------------
+    // ProcMana [PROCMANA]
+    // -------------------------------------------------------
+    match /users/{uid}/procManaProjects/{projectId} {
+      allow read: if hasProcManaAccess() && request.auth.uid == uid;
+      allow create: if hasProcManaAccess() && request.auth.uid == uid
+        && (
+          (request.resource.data.ownerUid == uid && isManaOwnerAfter(projectId))
+          || validManaInvite(projectId, request.resource.data.managementRole, request.resource.data.inviteCode)
+        );
+      allow update: if isManaOwner(projectId)
+        || (hasProcManaAccess() && request.auth.uid == uid
+          && request.resource.data.managementRole == resource.data.managementRole
+          && request.resource.data.ownerUid == resource.data.ownerUid);
+      allow delete: if isManaOwner(projectId) || (hasProcManaAccess() && request.auth.uid == uid);
+    }
+
+    match /users/{uid}/procManaCreateKeys/{key} {
+      allow read, create: if hasProcManaAccess() && request.auth.uid == uid;
+      allow update, delete: if false;
+    }
+
+    match /procmanaProjects/{projectId} {
+      allow read: if isManaFinance(projectId);
+      allow create: if hasProcManaAccess() && request.resource.data.ownerUid == request.auth.uid;
+      allow update: if isManaAdmin(projectId)
+        && request.resource.data.ownerUid == resource.data.ownerUid;
+      allow delete: if isManaOwner(projectId);
+    }
+
+    match /procmanaProjects/{projectId}/members/{uid} {
+      allow read: if isManaFinance(projectId);
+      allow create: if hasProcManaAccess() && request.auth.uid == uid
+        && (
+          (request.resource.data.ownerUid == uid && isManaOwnerAfter(projectId))
+          || validManaInvite(projectId, request.resource.data.managementRole, request.resource.data.inviteCode)
+        );
+      allow update, delete: if isManaOwner(projectId) && resource.data.managementRole != "owner";
+      // owner工事の自動同期では、owner本人の表示名・メール等を再同期する。
+      // uid / ownerUid / managementRole を固定した自己更新だけを追加許可する。
+      allow update: if isManaOwner(projectId)
+        && request.auth.uid == uid
+        && resource.data.managementRole == "owner"
+        && request.resource.data.managementRole == "owner"
+        && request.resource.data.ownerUid == resource.data.ownerUid
+        && request.resource.data.uid == resource.data.uid;
+    }
+
+    match /procmanaProjects/{projectId}/private/{docId} {
+      allow read: if isManaFinance(projectId);
+      allow create: if hasProcManaAccess() && request.resource.data.ownerUid == request.auth.uid && isManaOwnerAfter(projectId);
+      allow update: if isManaFinance(projectId);
+      allow delete: if isManaOwner(projectId);
+    }
+
+    match /procmanaProjects/{projectId}/estimates/{estimateId} {
+      allow read, create, update: if isManaFinance(projectId);
+      allow delete: if isManaAdmin(projectId);
+    }
+
+    match /procmanaProjects/{projectId}/contracts/{contractId} {
+      allow read: if isManaFinance(projectId);
+      allow create, update: if isManaAdmin(projectId);
+      allow delete: if false;
+    }
+
+    match /procmanaProjects/{projectId}/budgets/{budgetId} {
+      allow read: if isManaFinance(projectId);
+      allow create, update: if isManaAdmin(projectId);
+      allow delete: if false;
+    }
+
+    // 出来高部分払いの請求書。下書き・発行を管理し、発行済み合計を財務サマリーへ集計する。
+    match /procmanaProjects/{projectId}/invoices/{invoiceId} {
+      allow read: if isManaFinance(projectId);
+      allow create, update, delete: if isManaAdmin(projectId);
+    }
+
+    // 実行予算から自動生成する業者別発注書下書き。確定後は別コレクションへ履歴保存する。
+    match /procmanaProjects/{projectId}/purchaseOrderDrafts/{draftId} {
+      allow read: if isManaFinance(projectId);
+      allow create, update: if isManaAdmin(projectId);
+      allow delete: if false;
+    }
+
+    // 確定時点の発注書スナップショット。削除せず履歴として保持する。
+    match /procmanaProjects/{projectId}/purchaseOrders/{orderId} {
+      allow read: if isManaFinance(projectId);
+      allow create, update: if isManaAdmin(projectId);
+      allow delete: if false;
+    }
+
+    // ProcMana専用保管庫。ProcNova側には公開せず、経営管理権限だけで扱う。
+    // 削除・保管庫間移動の事実はactivityLogsへ残す。
+    match /procmanaProjects/{projectId}/documents/{documentId} {
+      allow read: if isManaFinance(projectId);
+      allow create: if isManaFinance(projectId)
+        && request.resource.data.projectId == projectId
+        && request.resource.data.uploadedBy == request.auth.uid;
+      allow update: if isManaFinance(projectId)
+        && request.resource.data.diff(resource.data).changedKeys()
+          .hasOnly(["status", "archivedAt", "archivedBy", "updatedAt"]);
+      allow delete: if isManaFinance(projectId);
+    }
+
+    match /procmanaProjects/{projectId}/activityLogs/{logId} {
+      allow read: if isManaFinance(projectId);
+      allow create: if isManaFinance(projectId);
+      allow update, delete: if false;
+    }
+
+    // ProcManaの顧客マスタ。会社（作成ユーザー）単位で登録し、工事へ使い回す。
+    match /procmanaCustomers/{customerId} {
+      allow read: if hasProcManaAccess() && resource.data.ownerUid == request.auth.uid;
+      allow create: if hasProcManaAccess() && request.resource.data.ownerUid == request.auth.uid;
+      allow update, delete: if hasProcManaAccess()
+        && resource.data.ownerUid == request.auth.uid
+        && request.resource.data.ownerUid == resource.data.ownerUid;
+    }
+
+    match /procManaInviteCodes/{code} {
+      allow read: if hasProcManaAccess();
+      allow create: if hasProcManaAccess()
+        && isManaOwner(request.resource.data.projectId)
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.managementRole in ["admin", "accounting"];
+      allow update: if hasProcManaAccess()
+        && resource.data.active == true
+        && resource.data.usedBy == null
+        && resource.data.expiresAt > request.time
+        && request.resource.data.projectId == resource.data.projectId
+        && request.resource.data.ownerUid == resource.data.ownerUid
+        && request.resource.data.managementRole == resource.data.managementRole
+        && request.resource.data.active == false
+        && request.resource.data.usedBy == request.auth.uid;
+      allow delete: if hasProcManaAccess() && resource.data.ownerUid == request.auth.uid;
+    }
+
+    // -------------------------------------------------------
+    // キャッチオール — 未定義コレクションは一切アクセス不可
+    // ⚠️ 旧設定 (read: if isLogin()) は OR 評価により上記の
+    //    細かい read 制限を全て無効化していたため false に変更。
+    //    新しいコレクションを使う場合は必ず明示ルールを追加すること。
+    // -------------------------------------------------------
+    match /{document=**} {
+      allow read: if false;
+      allow write: if false;
+    }
+  }
+}

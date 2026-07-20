@@ -20,7 +20,6 @@ import {
 import { AsYouType } from "libphonenumber-js";
 import { auth, db } from "@/lib/firebaseClient";
 import { expandWorkTypesToSubtitleNames } from "@/lib/workItemNames";
-import CraftsmanNavBar from "@/components/CraftsmanNavBar";
 
 function toNonEmptyString(v: unknown): string {
   return typeof v === "string" && v.trim() ? v.trim() : "";
@@ -59,7 +58,7 @@ function splitWorkTypes(v: string): string[] {
     .filter(Boolean);
 }
 
-// 職人の工種は工事に依存しないグローバルな属性のため、固定リストから複数選択する
+// 作業員の工種は工事に依存しないグローバルな属性のため、固定リストから複数選択する
 const WORK_TYPE_OPTIONS = [
   "足場",
   "下地補修",
@@ -380,7 +379,6 @@ export default function ProfileSettingsClient() {
         </div>
       </div>
 
-      <CraftsmanNavBar />
     </main>
   );
 }

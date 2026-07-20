@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import CraftsmanNavBar from "@/components/CraftsmanNavBar";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -32,7 +33,13 @@ export default function RootLayout({
   return (
     <html lang="ja">
       <body className="overflow-x-hidden antialiased">
-        <div className="pb-20">{children}</div>
+        <div
+          className="app-shell"
+          style={{ paddingBottom: "var(--craftsman-nav-height)" }}
+        >
+          {children}
+        </div>
+        <CraftsmanNavBar />
       </body>
     </html>
   );

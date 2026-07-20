@@ -1,5 +1,5 @@
 // src/lib/workItemNames.ts
-// 職人のグローバル工種（"足場" など）を、工事ごとの subtitle 名に展開する。
+// 作業員のグローバル工種（"足場" など）を、工事ごとの subtitle 名に展開する。
 //
 // proclink の工種一覧は members.workItemNames と subtitle 名の完全一致
 // （NFKC 正規化 + 「工事」接尾辞の揺れのみ吸収）でフィルタするため、
@@ -42,7 +42,7 @@ export async function expandWorkTypesToSubtitleNames(
     );
 
     // 1件も一致しない場合は元の工種名を保存（proclink では非表示になるが、
-    // その工事に職人の工種に対応する subtitle が無いという事実を反映）
+    // その工事に作業員の工種に対応する subtitle が無いという事実を反映）
     return matched.length > 0 ? Array.from(new Set(matched)) : wanted;
   } catch {
     // subtitles が読めない場合は元の工種名をそのまま使う

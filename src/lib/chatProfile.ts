@@ -36,7 +36,7 @@ function toNonEmptyString(v: unknown): string {
 }
 
 export async function loadChatProfile(db: Firestore, uid: string): Promise<ChatProfile | null> {
-  // 1) 職人を先に見る（renova-craftsman）
+  // 1) 作業員を先に見る（renova-craftsman）
   {
     const snap = await getDoc(doc(db, "craftsmen", uid));
     if (snap.exists()) {
@@ -45,7 +45,7 @@ export async function loadChatProfile(db: Firestore, uid: string): Promise<ChatP
       const projectId = toNonEmptyString(d.projectId);
       if (!projectId) return null;
 
-      const name = toNonEmptyString(d.name) || "職人";
+      const name = toNonEmptyString(d.name) || "作業員";
       const projectName = d.projectName ?? null;
 
       return {
@@ -59,7 +59,7 @@ export async function loadChatProfile(db: Firestore, uid: string): Promise<ChatP
     }
   }
 
-  // 2) 監督（Renova）
+  // 2) 管理者（Renova）
   {
     const snap = await getDoc(doc(db, "renovaMembers", uid));
     if (snap.exists()) {
@@ -68,7 +68,7 @@ export async function loadChatProfile(db: Firestore, uid: string): Promise<ChatP
       const projectId = toNonEmptyString(d.projectId);
       if (!projectId) return null;
 
-      const name = toNonEmptyString(d.name) || "監督";
+      const name = toNonEmptyString(d.name) || "管理者";
       const projectName = d.projectName ?? null;
 
       return {
